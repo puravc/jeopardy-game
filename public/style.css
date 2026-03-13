@@ -1876,6 +1876,10 @@ h3 {
         padding: 0 1rem 3rem !important;
     }
 
+    .games-grid {
+        grid-template-columns: 1fr;
+    }
+
     .board-tile {
         min-height: 45px;
         border-width: 1px;
