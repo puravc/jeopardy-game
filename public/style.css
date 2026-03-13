@@ -1745,6 +1745,10 @@ h3 {
     }
 
     .admin-sidebar-section {
+        display: contents;
+    }
+
+    .admin-sidebar-section h4 {
         display: none;
     }
 
@@ -1768,20 +1772,129 @@ h3 {
     }
 }
 
-@media (max-width: 600px) {
+@media (max-width: 768px) {
+
+    /* Header layout */
     .app-header {
+        flex-direction: column;
+        gap: 0.5rem;
         padding: 0.75rem 1rem;
     }
 
+    /* Allow board grid to squish without scrolling */
+    .game-board-area {
+        padding: 1rem;
+    }
+
+    .board-grid {
+        padding: 0;
+    }
+
+    /* Scoreboard side-by-side on mobile */
+    .scoreboard {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 0.5rem;
+    }
+
+    /* Stack admin rows */
+    .input-row {
+        flex-direction: column;
+        align-items: stretch;
+        max-width: 100% !important;
+    }
+
+    .input-row .btn {
+        width: 100%;
+    }
+
+    .category-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.75rem;
+    }
+
+    .category-actions {
+        width: 100%;
+        flex-wrap: wrap;
+    }
+
+    .category-actions .btn {
+        flex: 1;
+    }
+
+    .category-hint-row {
+        flex-direction: column;
+    }
+
+    /* Modal adjustments */
     .modal {
         padding: 1.5rem;
+        max-height: 90vh;
+        overflow-y: auto;
+    }
+
+    .modal-value {
+        font-size: 2.2rem;
+        margin-bottom: 1rem;
+    }
+
+    .modal-question {
+        font-size: 1.5rem;
+    }
+
+    /* Game Info boxes */
+    .info-grid {
+        grid-template-columns: 1fr;
+    }
+
+    /* Manual Entry Dialog specific */
+    .manual-row {
+        grid-template-columns: 60px 1fr 30px !important;
+    }
+
+    .manual-fields {
+        flex-direction: column;
+    }
+}
+
+@media (max-width: 480px) {
+    .home-hero {
+        padding: 2rem 1rem;
+    }
+
+    .home-title {
+        font-size: 2.5rem;
+    }
+
+    .btn-xl {
+        padding: 0.8rem 1.5rem;
+        font-size: 1rem;
     }
 
     .board-tile {
-        min-height: 55px;
+        min-height: 45px;
+        border-width: 1px;
     }
 
-    .info-grid {
-        grid-template-columns: 1fr;
+    .tile-value {
+        font-size: 1rem;
+    }
+
+    .board-category-header {
+        font-size: 0.65rem;
+        min-height: 35px;
+        padding: 0.25rem;
+        border-width: 1px;
+        word-wrap: break-word;
+    }
+
+    /* Scoreboard */
+    .score-card {
+        padding: 0.5rem;
+    }
+
+    .score-value {
+        font-size: 1.1rem;
     }
 }
