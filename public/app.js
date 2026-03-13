@@ -48,7 +48,7 @@ const API = {
     updateQuestions: (gid, cid, questions) => API.put(`/games/${gid}/categories/${cid}/questions`, { questions }),
 
     // AI
-    generateQuestions: (gid, categoryId) => API.post(`/games/${gid}/generate-questions`, { categoryId }),
+    generateQuestions: (gid, categoryId, hint) => API.post(`/games/${gid}/generate-questions`, { categoryId, hint }),
     getConfig: () => API.get('/config'),
 
     // game control
@@ -355,6 +355,15 @@ function renderCategoryList(game) {
           </button>
           <button class="btn btn-danger btn-sm" onclick="removeCategory('${cat.id}')">✕</button>
         </div>
+        <div class="category-hint-row">
+          <input
+            type="text"
+            id="hint-${cat.id}"
+            class="hint-input"
+            placeholder="💡 Hint: e.g. focus on 1990s, beginner level, multiple choice style..."
+            maxlength="200"
+          />
+        </div>
       </div>
       ${qCount > 0 ? renderQuestionList(cat) : ''}
     </div>`;
@@ -506,7 +515,9 @@ async function generateQuestions(catId) {
     genBtn.innerHTML = `<span class="spinner" style="color:white;"></span> Generating...`;
 
     try {
-        const { questions } = await API.generateQuestions(State.currentGameId, catId);
+        const hintInput = document.getElementById(`hint-${catId}`);
+        const hint = hintInput ? hintInput.value.trim() : '';
+        const { questions } = await API.generateQuestions(State.currentGameId, catId, hint);
         const game = await API.getGame(State.currentGameId);
         State.game = game;
         renderCategoryList(game);
