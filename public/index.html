@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Jeopardy! — AI-Powered Game</title>
+  <meta name="description" content="Host your own AI-powered Jeopardy game with custom topics, auto-generated questions, and live scoring." />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div class="app-wrapper">
+
+  <!-- ─── Global Header ─── -->
+  <header class="app-header" id="app-header">
+    <a href="#" class="logo" id="logo-home-btn">
+      <div class="logo-icon">🎯</div>
+      <span class="logo-text">JEOPARDY!</span>
+    </a>
+    <nav class="header-nav" id="header-nav">
+      <!-- populated by JS -->
+    </nav>
+  </header>
+
+  <!-- ═══════════════════════════════════════
+       VIEW: HOME
+       ═══════════════════════════════════════ -->
+  <div id="view-home" class="view">
+    <div class="home-hero">
+      <h1 class="home-title">JEOPARDY!</h1>
+      <p class="hero-subtitle">AI-powered Jeopardy with custom topics, auto-generated questions, and live scoring.</p>
+      <button class="btn btn-gold btn-xl" id="btn-new-game">
+        <span>✨</span> New Game
+      </button>
+    </div>
+
+    <div style="max-width:1100px; margin:0 auto; padding:0 2rem 3rem;">
+      <div class="flex justify-between items-center mb-2">
+        <h2 style="font-size:1.4rem; color:var(--text-secondary);">SAVED GAMES</h2>
+        <span class="text-muted text-sm" id="games-count"></span>
+      </div>
+      <div class="games-grid" id="games-grid">
+        <div class="empty-state">
+          <div class="empty-state-icon">🃏</div>
+          <p>No games yet. Create your first game to get started!</p>
+          <button class="btn btn-primary" id="btn-new-game-empty">✨ New Game</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       VIEW: ADMIN CONSOLE
+       ═══════════════════════════════════════ -->
+  <div id="view-admin" class="view">
+    <div class="admin-layout">
+
+      <!-- Sidebar nav -->
+      <aside class="admin-sidebar">
+        <div class="admin-sidebar-section">
+          <h4>Configure</h4>
+          <button class="admin-nav-item active" data-section="game-info" id="nav-game-info">
+            <span class="nav-icon">⚙️</span> Game Info
+          </button>
+          <button class="admin-nav-item" data-section="players" id="nav-players">
+            <span class="nav-icon">👥</span> Players
+          </button>
+          <button class="admin-nav-item" data-section="topics" id="nav-topics">
+            <span class="nav-icon">📚</span> Topics & Questions
+          </button>
+        </div>
+        <div class="admin-sidebar-section" style="margin-top:auto;">
+          <h4>Actions</h4>
+          <button class="admin-nav-item" data-section="launch" id="nav-launch">
+            <span class="nav-icon">🚀</span> Launch Game
+          </button>
+        </div>
+      </aside>
+
+      <!-- Main content -->
+      <main class="admin-main">
+
+        <!-- Game Info section -->
+        <section id="admin-game-info" class="admin-section active">
+          <div class="admin-section-header">
+            <h2 class="admin-section-title">GAME INFO</h2>
+          </div>
+          <div class="card" style="max-width:520px;">
+            <div class="form-group">
+              <label class="form-label" for="input-game-name">Game Name</label>
+              <input type="text" id="input-game-name" class="form-input" placeholder="e.g. Friday Night Trivia" maxlength="80" />
+            </div>
+            <button class="btn btn-primary" id="btn-save-game-name">💾 Save Name</button>
+          </div>
+
+          <div class="divider"></div>
+
+          <div class="info-grid" id="admin-stats-grid">
+            <div class="info-card">
+              <div class="info-card-value" id="stat-players">0</div>
+              <div class="info-card-label">Players</div>
+            </div>
+            <div class="info-card">
+              <div class="info-card-value" id="stat-topics">0</div>
+              <div class="info-card-label">Topics</div>
+            </div>
+            <div class="info-card">
+              <div class="info-card-value" id="stat-questions">0</div>
+              <div class="info-card-label">Questions Ready</div>
+            </div>
+            <div class="info-card">
+              <div class="info-card-value" id="stat-status">—</div>
+              <div class="info-card-label">Status</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Players section -->
+        <section id="admin-players" class="admin-section">
+          <div class="admin-section-header">
+            <h2 class="admin-section-title">PLAYERS</h2>
+          </div>
+          <div class="player-list" id="player-list">
+            <!-- populated -->
+          </div>
+          <div class="input-row" style="max-width:400px;">
+            <input type="text" id="input-player-name" class="form-input" placeholder="Player name..." maxlength="40" />
+            <button class="btn btn-primary" id="btn-add-player">+ Add</button>
+          </div>
+        </section>
+
+        <!-- Topics & Questions section -->
+        <section id="admin-topics" class="admin-section">
+          <div class="admin-section-header">
+            <h2 class="admin-section-title">TOPICS & QUESTIONS</h2>
+          </div>
+          <div class="category-list" id="category-list">
+            <!-- populated -->
+          </div>
+          <div class="input-row" style="max-width:480px; margin-bottom:0.5rem;">
+            <input type="text" id="input-category-name" class="form-input" placeholder="Topic name (e.g. Science, History)..." maxlength="60" />
+            <button class="btn btn-primary" id="btn-add-category">+ Add Topic</button>
+          </div>
+          <p class="text-sm text-muted mt-1">After adding a topic, click "Generate Questions" to have AI write 10 Jeopardy questions for it.</p>
+        </section>
+
+        <!-- Launch section -->
+        <section id="admin-launch" class="admin-section">
+          <div class="admin-section-header">
+            <h2 class="admin-section-title">LAUNCH GAME</h2>
+          </div>
+          <div class="start-game-panel">
+            <h3>PRE-FLIGHT CHECK</h3>
+            <p>All conditions must be met before the game can start.</p>
+            <ul class="validation-list" id="validation-list">
+              <!-- populated -->
+            </ul>
+            <div style="display:flex; gap:1rem; justify-content:center; flex-wrap:wrap;">
+              <button class="btn btn-gold btn-xl" id="btn-start-game" disabled>🚀 Start Game!</button>
+              <button class="btn btn-ghost" id="btn-reset-game">🔄 Reset Scores</button>
+            </div>
+          </div>
+        </section>
+
+      </main>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       VIEW: GAME BOARD
+       ═══════════════════════════════════════ -->
+  <div id="view-game" class="view">
+    <div class="game-layout">
+
+      <!-- Board area -->
+      <div class="game-board-area">
+        <h1 class="game-board-title" id="game-board-title">JEOPARDY!</h1>
+        <div class="board-grid" id="board-grid">
+          <!-- populated -->
+        </div>
+      </div>
+
+      <!-- Scoreboard sidebar -->
+      <aside class="game-sidebar">
+        <div>
+          <p class="sidebar-section-title">📊 Scoreboard</p>
+          <div class="scoreboard" id="scoreboard">
+            <!-- populated -->
+          </div>
+        </div>
+
+        <div>
+          <p class="sidebar-section-title">📈 Progress</p>
+          <div class="progress-info">
+            <div class="progress-label">Questions Answered</div>
+            <div class="progress-bar-bg">
+              <div class="progress-bar-fill" id="progress-bar" style="width:0%"></div>
+            </div>
+            <div class="progress-text" id="progress-text">0 / 0</div>
+          </div>
+        </div>
+
+        <div class="game-controls">
+          <p class="sidebar-section-title">⚙️ Controls</p>
+          <button class="btn btn-ghost btn-sm" id="btn-pause-game">⏸ Pause & Save</button>
+          <button class="btn btn-ghost btn-sm" id="btn-back-admin">← Back to Admin</button>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       VIEW: GAME COMPLETE
+       ═══════════════════════════════════════ -->
+  <div id="view-complete" class="view">
+    <div style="width:100%; max-width:600px; margin:0 auto; padding:2rem;">
+      <div class="complete-title" id="complete-trophy">🏆</div>
+      <h1 class="complete-title" style="font-size:clamp(3rem,6vw,5rem);">GAME OVER!</h1>
+      <p class="complete-subtitle" id="complete-winner-text">And the winner is...</p>
+
+      <div class="final-scores" id="final-scores">
+        <!-- populated -->
+      </div>
+
+      <div class="complete-actions">
+        <button class="btn btn-gold btn-xl" id="btn-play-again">🔄 Play Again</button>
+        <button class="btn btn-ghost btn-lg" id="btn-home-complete">🏠 Home</button>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /app-wrapper -->
+
+<!-- ─── Question Modal ─── -->
+<div class="modal-overlay" id="question-modal">
+  <div class="modal">
+    <button class="modal-close" id="modal-close-btn">✕</button>
+    <div class="modal-category" id="modal-cat-name"></div>
+    <div class="modal-value" id="modal-value"></div>
+    <div class="modal-question" id="modal-question"></div>
+
+    <div class="modal-answer-reveal" id="modal-answer-reveal">
+      <div class="modal-answer-label">Answer</div>
+      <div id="modal-answer-text"></div>
+    </div>
+
+    <div class="modal-divider"></div>
+
+    <div class="modal-award-section">
+      <div class="modal-award-title">✅ Who answered correctly?</div>
+      <div class="player-award-grid" id="player-award-grid">
+        <!-- populated -->
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="btn-reveal-answer">👁 Reveal Answer</button>
+        <button class="btn btn-danger" id="btn-skip-question">⏭ Skip (No Points)</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Loading Overlay ─── -->
+<div class="loading-overlay" id="loading-overlay">
+  <div class="spinner"></div>
+  <div class="loading-text" id="loading-text">LOADING...</div>
+</div>
+
+<!-- ─── Toast Container ─── -->
+<div class="toast-container" id="toast-container"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
