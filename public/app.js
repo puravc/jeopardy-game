@@ -48,7 +48,7 @@ const API = {
     updateQuestions: (gid, cid, questions) => API.put(`/games/${gid}/categories/${cid}/questions`, { questions }),
 
     // AI
-    generateQuestions: (gid, categoryId, hint) => API.post(`/games/${gid}/generate-questions`, { categoryId, hint }),
+    generateQuestions: (gid, categoryId, hint, difficulty) => API.post(`/games/${gid}/generate-questions`, { categoryId, hint, difficulty }),
     getConfig: () => API.get('/config'),
 
     // game control
@@ -356,6 +356,12 @@ function renderCategoryList(game) {
           <button class="btn btn-danger btn-sm" onclick="removeCategory('${cat.id}')">✕</button>
         </div>
         <div class="category-hint-row">
+          <select id="diff-${cat.id}" class="difficulty-select" title="Difficulty Level">
+            <option value="easy">Easy</option>
+            <option value="medium" selected>Medium</option>
+            <option value="hard">Hard</option>
+            <option value="impossible">Impossible</option>
+          </select>
           <input
             type="text"
             id="hint-${cat.id}"
@@ -517,7 +523,9 @@ async function generateQuestions(catId) {
     try {
         const hintInput = document.getElementById(`hint-${catId}`);
         const hint = hintInput ? hintInput.value.trim() : '';
-        const { questions } = await API.generateQuestions(State.currentGameId, catId, hint);
+        const diffSelect = document.getElementById(`diff-${catId}`);
+        const difficulty = diffSelect ? diffSelect.value : 'medium';
+        const { questions } = await API.generateQuestions(State.currentGameId, catId, hint, difficulty);
         const game = await API.getGame(State.currentGameId);
         State.game = game;
         renderCategoryList(game);
@@ -535,21 +543,8 @@ function openManualEntry(catId) {
     const cat = State.game.categories.find(c => c.id === catId);
     if (!cat) return;
 
-    const VALUES = [200, 400, 600, 800, 1000, 200, 400, 600, 800, 1000];
-    const existing = cat.questions;
-
-    // Build form rows
-    const rows = VALUES.map((val, i) => {
-        const q = existing[i] || {};
-        return `
-        <div class="manual-row">
-          <div class="manual-value">$${val}</div>
-          <div class="manual-fields">
-            <input class="form-input manual-q" placeholder="Question / Clue..." value="${escHtml(q.question || '')}" data-index="${i}" data-value="${val}" />
-            <input class="form-input manual-a" placeholder="Answer..." value="${escHtml(q.answer || '')}" data-index="${i}" />
-          </div>
-        </div>`;
-    }).join('');
+    let currentQuestions = cat.questions.length > 0 ? [...cat.questions] :
+        [200, 400, 600, 800, 1000].map(v => ({ value: v, question: '', answer: '' }));
 
     // Inject dialog into DOM
     const existing_dialog = document.getElementById('manual-entry-dialog');
@@ -563,9 +558,9 @@ function openManualEntry(catId) {
     `;
     dialog.innerHTML = `
         <div style="background:var(--bg-card);border:1px solid var(--border-gold);border-radius:var(--radius-lg);
-                    padding:2rem;max-width:800px;width:100%;max-height:90vh;overflow-y:auto;
+                    padding:2rem;max-width:850px;width:100%;max-height:90vh;display:flex;flex-direction:column;
                     box-shadow:var(--shadow-gold);">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;flex-shrink:0;">
                 <div>
                     <h2 style="font-size:1.6rem;background:linear-gradient(135deg,var(--text-primary),var(--blue-bright));
                                -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">
@@ -575,14 +570,13 @@ function openManualEntry(catId) {
                 </div>
                 <button id="manual-close" class="btn btn-ghost btn-sm">✕ Cancel</button>
             </div>
-            <div style="display:flex;flex-direction:column;gap:0.6rem;margin-bottom:1.5rem;">
-                <div style="display:grid;grid-template-columns:60px 1fr;gap:0.5rem;padding:0 0 0.25rem;
-                            font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--text-muted);">
-                    <span>Points</span><span>Question → Answer (fill at least 5)</span>
-                </div>
-                ${rows}
+            
+            <div id="manual-rows-container" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:0.6rem;margin-bottom:1.5rem;padding-right:0.5rem;">
+                <!-- rows injected here -->
             </div>
-            <div style="display:flex;gap:1rem;justify-content:flex-end;">
+            
+            <div style="display:flex;gap:1rem;justify-content:space-between;flex-shrink:0;">
+                <button id="manual-add-row" class="btn btn-ghost btn-sm">➕ Add Question</button>
                 <button id="manual-save" class="btn btn-gold">💾 Save Questions</button>
             </div>
         </div>`;
@@ -590,32 +584,86 @@ function openManualEntry(catId) {
     // Extra styles for rows
     const style = document.createElement('style');
     style.textContent = `
-        .manual-row { display:grid;grid-template-columns:60px 1fr;gap:0.5rem;align-items:start; }
-        .manual-value { font-family:'Bebas Neue',sans-serif;font-size:1.2rem;color:var(--gold);padding-top:0.55rem; }
+        .manual-row { display:grid;grid-template-columns:80px 1fr 36px;gap:0.5rem;align-items:start; }
         .manual-fields { display:flex;gap:0.4rem; }
         .manual-fields .form-input { flex:1; font-size:0.82rem; padding:0.5rem 0.75rem; }
+        .manual-v { font-size:0.9rem; padding:0.5rem; text-align:center; font-family:'Bebas Neue',sans-serif; color:var(--gold); }
     `;
     dialog.appendChild(style);
     document.body.appendChild(dialog);
 
+    const container = dialog.querySelector('#manual-rows-container');
+
+    function renderRows() {
+        let html = `
+            <div style="display:grid;grid-template-columns:80px 1fr 36px;gap:0.5rem;padding:0 0 0.25rem;
+                        font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--text-muted);">
+                <span>Points</span><span>Question → Answer (fill at least 5 for game)</span><span></span>
+            </div>
+        `;
+        currentQuestions.forEach((q, i) => {
+            html += `
+            <div class="manual-row" data-index="${i}">
+              <input type="number" class="form-input manual-v" placeholder="Pts" value="${q.value}" />
+              <div class="manual-fields">
+                <input class="form-input manual-q" placeholder="Question / Clue..." value="${escHtml(q.question || '')}" />
+                <input class="form-input manual-a" placeholder="Answer..." value="${escHtml(q.answer || '')}" />
+              </div>
+              <button class="btn btn-danger btn-sm manual-remove-row" data-index="${i}">✕</button>
+            </div>`;
+        });
+        container.innerHTML = html;
+
+        // Attach remove row listeners
+        container.querySelectorAll('.manual-remove-row').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const idx = parseInt(e.target.dataset.index);
+                syncInputsToArray();
+                currentQuestions.splice(idx, 1);
+                renderRows();
+            });
+        });
+    }
+
+    function syncInputsToArray() {
+        const rows = container.querySelectorAll('.manual-row');
+        rows.forEach((row, i) => {
+            if (currentQuestions[i]) {
+                currentQuestions[i].value = parseInt(row.querySelector('.manual-v').value) || 0;
+                currentQuestions[i].question = row.querySelector('.manual-q').value;
+                currentQuestions[i].answer = row.querySelector('.manual-a').value;
+            }
+        });
+    }
+
+    renderRows();
+
+    document.getElementById('manual-add-row').addEventListener('click', () => {
+        syncInputsToArray();
+        const lastVal = currentQuestions.length > 0 ? currentQuestions[currentQuestions.length - 1].value : 0;
+        currentQuestions.push({ value: lastVal + 200, question: '', answer: '' });
+        renderRows();
+        // scroll to bottom
+        setTimeout(() => container.scrollTop = container.scrollHeight, 50);
+    });
+
     document.getElementById('manual-close').addEventListener('click', () => dialog.remove());
 
     document.getElementById('manual-save').addEventListener('click', async () => {
-        const qInputs = dialog.querySelectorAll('.manual-q');
-        const aInputs = dialog.querySelectorAll('.manual-a');
+        syncInputsToArray();
 
-        const questions = [];
-        qInputs.forEach((qEl, i) => {
-            const qText = qEl.value.trim();
-            const aText = aInputs[i].value.trim();
-            if (qText && aText) {
-                const val = parseInt(qEl.dataset.value);
-                questions.push({ id: crypto.randomUUID(), value: val, question: qText, answer: aText, answered: false, answeredBy: null });
+        const questionsToSave = [];
+        currentQuestions.forEach(q => {
+            const qText = q.question.trim();
+            const aText = q.answer.trim();
+            const val = q.value;
+            if (qText && aText && val > 0) {
+                questionsToSave.push({ id: crypto.randomUUID(), value: val, question: qText, answer: aText, answered: false, answeredBy: null });
             }
         });
 
-        if (questions.length < 5) {
-            showToast('Fill in at least 5 question/answer pairs', 'warning');
+        if (questionsToSave.length < 5) {
+            showToast('Fill in at least 5 complete question/answer pairs with points > 0', 'warning');
             return;
         }
 
@@ -624,13 +672,13 @@ function openManualEntry(catId) {
         saveBtn.textContent = 'Saving...';
 
         try {
-            await API.updateQuestions(State.currentGameId, catId, questions);
+            await API.updateQuestions(State.currentGameId, catId, questionsToSave);
             const game = await API.getGame(State.currentGameId);
             State.game = game;
             renderCategoryList(game);
             renderAdminStats(game);
             dialog.remove();
-            showToast(`✅ Saved ${questions.length} questions for "${cat.name}"!`, 'success');
+            showToast(`✅ Saved ${questionsToSave.length} questions for "${cat.name}"!`, 'success');
         } catch (e) {
             showToast('Save failed: ' + e.message, 'error');
             saveBtn.disabled = false;

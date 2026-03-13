@@ -732,6 +732,31 @@ h3 {
 
 .category-hint-row {
     padding: 0 1.25rem 0.75rem;
+    display: flex;
+    gap: 0.5rem;
+}
+
+.difficulty-select {
+    flex-shrink: 0;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-family: 'Inter', sans-serif;
+    font-size: 0.8rem;
+    padding: 0.5rem 1rem;
+    transition: border-color var(--transition);
+    cursor: pointer;
+}
+
+.difficulty-select:focus {
+    outline: none;
+    border-color: var(--blue-neon);
+}
+
+.difficulty-select option {
+    background: var(--bg-card);
+    color: var(--text-primary);
 }
 
 .hint-input {

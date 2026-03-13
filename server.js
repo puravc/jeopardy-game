@@ -221,7 +221,7 @@ app.put('/api/games/:id/categories/:catId/questions', async (req, res) => {
 
 // POST /api/games/:id/generate-questions — AI generate questions for a category
 app.post('/api/games/:id/generate-questions', async (req, res) => {
-    const { categoryId, hint } = req.body;
+    const { categoryId, hint, difficulty = 'medium' } = req.body;
     const openai = getAI();
     if (!openai) return res.status(400).json({ error: 'No Anthropic API key configured. Add ANTHROPIC_API_KEY to .env.' });
 
@@ -239,6 +239,7 @@ app.post('/api/games/:id/generate-questions', async (req, res) => {
                 content: `You are a Jeopardy game question writer. Return ONLY valid JSON arrays with no markdown, no extra text.
 
 Generate exactly 10 Jeopardy-style questions for the category "${category.name}".
+Difficulty Level: ${difficulty.toUpperCase()}
 ${hint ? `\nAdditional instructions from the host: ${hint}\n` : ''}
 Point values (in order): 200, 400, 600, 800, 1000, 200, 400, 600, 800, 1000
 The "question" is a clue/statement; the "answer" is what the contestant says.
