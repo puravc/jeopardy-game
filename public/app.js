@@ -893,22 +893,16 @@ async function deductPoints(playerId) {
         if (wrongBtn) wrongBtn.disabled = true;
     }
 
+    closeModal();
+
     try {
         const updatedGame = await API.deductPoints(State.currentGameId, qId, playerId, catId);
         State.game = updatedGame;
 
         renderBoard(updatedGame);
         showToast(`-$${q.value} deducted from ${player?.name || 'player'}.`, 'warning');
-
-        // Re-render the modal content to update scores and disable the red button formally
-        openQuestionModal(catId, qId);
     } catch (e) {
         showToast(e.message, 'error');
-        // Re-enable if error
-        if (card) {
-            const wrongBtn = card.querySelector('.btn-danger');
-            if (wrongBtn) wrongBtn.disabled = false;
-        }
     }
 }
 
