@@ -901,6 +901,13 @@ async function deductPoints(playerId) {
 
         renderBoard(updatedGame);
         showToast(`-$${q.value} deducted from ${player?.name || 'player'}.`, 'warning');
+
+        if (updatedGame.status === 'completed') {
+            setTimeout(() => {
+                showView('complete');
+                renderCompleteView(updatedGame);
+            }, 800);
+        }
     } catch (e) {
         showToast(e.message, 'error');
     }

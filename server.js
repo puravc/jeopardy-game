@@ -380,11 +380,14 @@ app.post('/api/games/:id/deduct', async (req, res) => {
             return res.status(400).json({ error: 'Player already guessed incorrectly' });
         }
 
-        // Deduct points and record wrong answer attempt
+        // Deduct points and mark the question as fully answered (ending it)
         const updatedCategories = game.categories.map(c => ({
             ...c,
-            questions: c.questions.map(qu => qu.id === questionId ? { ...qu, wrongAnswers: [...(qu.wrongAnswers || []), playerId] } : qu),
+            questions: c.questions.map(qu => qu.id === questionId ? { ...qu, answered: true, wrongAnswers: [...(qu.wrongAnswers || []), playerId] } : qu),
         }));
+
+        const allAnswered = updatedCategories.every(c => c.questions.every(qu => qu.answered));
+        const newStatus = allAnswered ? 'completed' : game.status;
 
         const updatedPlayers = game.players.map(p =>
             p.id === playerId ? { ...p, score: p.score - q.value } : p
@@ -392,7 +395,7 @@ app.post('/api/games/:id/deduct', async (req, res) => {
 
         const updated = await gamesCol().findOneAndUpdate(
             { id: req.params.id },
-            { $set: { categories: updatedCategories, players: updatedPlayers, updatedAt: new Date().toISOString() } },
+            { $set: { categories: updatedCategories, players: updatedPlayers, status: newStatus, updatedAt: new Date().toISOString() } },
             { returnDocument: 'after', projection: { _id: 0 } }
         );
         res.json(updated);
