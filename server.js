@@ -361,6 +361,46 @@ app.post('/api/games/:id/award', async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
+// POST /api/games/:id/deduct — Deduct points for wrong answer
+app.post('/api/games/:id/deduct', async (req, res) => {
+    const { questionId, playerId, categoryId } = req.body;
+    try {
+        const game = await gamesCol().findOne({ id: req.params.id }, { projection: { _id: 0 } });
+        if (!game) return res.status(404).json({ error: 'Game not found' });
+
+        const cat = game.categories.find(c => c.id === categoryId);
+        if (!cat) return res.status(404).json({ error: 'Category not found' });
+        const q = cat.questions.find(q => q.id === questionId);
+        if (!q) return res.status(404).json({ error: 'Question not found' });
+
+        if (q.answered) return res.status(400).json({ error: 'Question already answered correctly' });
+
+        let wrongAnswers = q.wrongAnswers || [];
+        if (wrongAnswers.includes(playerId)) {
+            return res.status(400).json({ error: 'Player already guessed incorrectly' });
+        }
+
+        // Deduct points and record wrong answer attempt
+        const updatedCategories = game.categories.map(c => ({
+            ...c,
+            questions: c.questions.map(qu => qu.id === questionId ? { ...qu, wrongAnswers: [...(qu.wrongAnswers || []), playerId] } : qu),
+        }));
+
+        const updatedPlayers = game.players.map(p =>
+            p.id === playerId ? { ...p, score: p.score - q.value } : p
+        );
+
+        const updated = await gamesCol().findOneAndUpdate(
+            { id: req.params.id },
+            { $set: { categories: updatedCategories, players: updatedPlayers, updatedAt: new Date().toISOString() } },
+            { returnDocument: 'after', projection: { _id: 0 } }
+        );
+        res.json(updated);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 
 // POST /api/games/:id/skip — Skip a question
 app.post('/api/games/:id/skip', async (req, res) => {

@@ -57,6 +57,8 @@ const API = {
     resetGame: (id) => API.post(`/games/${id}/reset`),
     awardPoints: (id, questionId, playerId, categoryId) =>
         API.post(`/games/${id}/award`, { questionId, playerId, categoryId }),
+    deductPoints: (id, questionId, playerId, categoryId) =>
+        API.post(`/games/${id}/deduct`, { questionId, playerId, categoryId }),
     skipQuestion: (id, questionId, categoryId) =>
         API.post(`/games/${id}/skip`, { questionId, categoryId }),
 };
@@ -177,6 +179,8 @@ function renderGamesList(games) {
         <span>👥 ${g.playerCount} player${g.playerCount !== 1 ? 's' : ''}</span>
         <span>📚 ${g.categoryCount} topic${g.categoryCount !== 1 ? 's' : ''}</span>
         <span>📅 ${formatDate(g.updatedAt)}</span>
+        ${g.status === 'completed' && g.players && g.players.length > 0 ?
+            `<span style="color:var(--gold);font-weight:bold;" title="Winner">👑 ${escHtml([...g.players].sort((a, b) => b.score - a.score)[0].name)}</span>` : ''}
       </div>
       <div class="game-card-actions">
         ${g.status === 'active' || g.status === 'paused'
@@ -811,13 +815,19 @@ function openQuestionModal(catId, qId) {
 
     // Player buttons
     const grid = $('#player-award-grid');
-    grid.innerHTML = State.game.players.map(p => `
-    <button class="player-award-btn" data-player-id="${p.id}" onclick="awardPoints('${p.id}')">
+    grid.innerHTML = State.game.players.map(p => {
+        const hasGuessedWrong = (q.wrongAnswers || []).includes(p.id);
+        return `
+    <div class="player-award-card" data-player-id="${p.id}">
       <div class="award-avatar">${initials(p.name)}</div>
       <div class="award-name">${escHtml(p.name)}</div>
       <div class="award-score">$${p.score.toLocaleString()}</div>
-    </button>
-  `).join('');
+      <div class="award-actions">
+          <button class="btn btn-primary" onclick="awardPoints('${p.id}')" title="Correct">✅</button>
+          <button class="btn btn-danger" onclick="deductPoints('${p.id}')" ${hasGuessedWrong ? 'disabled' : ''} title="Wrong">❌</button>
+      </div>
+    </div>
+  `}).join('');
 
     $('#question-modal').classList.add('open');
 }
@@ -841,10 +851,10 @@ async function awardPoints(playerId) {
 
     const player = State.game.players.find(p => p.id === playerId);
 
-    // Animate score fly from the player button
-    const btn = $(`.player-award-btn[data-player-id="${playerId}"]`);
-    if (btn) {
-        const rect = btn.getBoundingClientRect();
+    // Animate score fly from the player card
+    const card = $(`.player-award-card[data-player-id="${playerId}"]`);
+    if (card) {
+        const rect = card.getBoundingClientRect();
         animateScoreFly(rect.left + rect.width / 2, rect.top, q.value);
     }
 
@@ -865,6 +875,40 @@ async function awardPoints(playerId) {
         }
     } catch (e) {
         showToast(e.message, 'error');
+    }
+}
+
+async function deductPoints(playerId) {
+    const { catId, qId } = State.activeModal;
+    const cat = State.game.categories.find(c => c.id === catId);
+    const q = cat?.questions.find(q => q.id === qId);
+    if (!q) return;
+
+    const player = State.game.players.find(p => p.id === playerId);
+
+    // Disable the button to prevent double-clicks instantly
+    const card = $(`.player-award-card[data-player-id="${playerId}"]`);
+    if (card) {
+        const wrongBtn = card.querySelector('.btn-danger');
+        if (wrongBtn) wrongBtn.disabled = true;
+    }
+
+    try {
+        const updatedGame = await API.deductPoints(State.currentGameId, qId, playerId, catId);
+        State.game = updatedGame;
+
+        renderBoard(updatedGame);
+        showToast(`-$${q.value} deducted from ${player?.name || 'player'}.`, 'warning');
+
+        // Re-render the modal content to update scores and disable the red button formally
+        openQuestionModal(catId, qId);
+    } catch (e) {
+        showToast(e.message, 'error');
+        // Re-enable if error
+        if (card) {
+            const wrongBtn = card.querySelector('.btn-danger');
+            if (wrongBtn) wrongBtn.disabled = false;
+        }
     }
 }
 
@@ -918,6 +962,15 @@ function renderCompleteView(game) {
     const winner = sorted[0];
     if (winner) {
         $('#complete-winner-text').textContent = `🎉 ${winner.name} wins with $${winner.score.toLocaleString()}!`;
+
+        if (window.confetti) {
+            confetti({
+                particleCount: 150,
+                spread: 100,
+                origin: { y: 0.6 },
+                colors: ['#ffd700', '#4f8ef7', '#10b981', '#f43f5e']
+            });
+        }
     }
 
     const rankEmojis = ['🥇', '🥈', '🥉'];

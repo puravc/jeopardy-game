@@ -1338,7 +1338,7 @@ h3 {
     margin-bottom: 1rem;
 }
 
-.player-award-btn {
+.player-award-card {
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -1347,19 +1347,24 @@ h3 {
     background: var(--bg-secondary);
     border: 2px solid var(--border);
     border-radius: var(--radius-sm);
-    cursor: pointer;
-    transition: all var(--transition);
     font-family: 'Inter', sans-serif;
 }
 
-.player-award-btn:hover {
-    border-color: var(--gold);
-    background: var(--bg-card-hover);
-    transform: translateY(-2px);
-    box-shadow: 0 4px 15px var(--gold-glow);
+.award-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+    width: 100%;
+    justify-content: center;
 }
 
-.player-award-btn .award-avatar {
+.award-actions .btn {
+    padding: 0.3rem 0.6rem;
+    font-size: 0.9rem;
+    flex: 1;
+}
+
+.player-award-card .award-avatar {
     width: 40px;
     height: 40px;
     border-radius: 50%;
