@@ -19,6 +19,10 @@ const API = {
             method,
             headers: { 'Content-Type': 'application/json' },
         };
+        const token = localStorage.getItem('admin_token');
+        if (token) {
+            opts.headers['Authorization'] = 'Bearer ' + token;
+        }
         if (body !== undefined) opts.body = JSON.stringify(body);
         const res = await fetch(this.base + path, opts);
         const data = await res.json();
@@ -146,11 +150,24 @@ async function goHome() {
 }
 
 async function loadHomeView() {
+    if (!localStorage.getItem('admin_token')) {
+        // Not signed in — hide the games section
+        const grid = $('#games-grid');
+        const count = $('#games-count');
+        count.textContent = '';
+        grid.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-state-icon">🔐</div>
+        <p>Sign in as admin to view and manage your games.</p>
+      </div>`;
+        return;
+    }
     try {
         const games = await API.listGames();
         renderGamesList(games);
     } catch (e) {
         showToast('Failed to load games: ' + e.message, 'error');
+
     }
 }
 
@@ -160,11 +177,12 @@ function renderGamesList(games) {
     count.textContent = games.length ? `${games.length} game${games.length !== 1 ? 's' : ''}` : '';
 
     if (!games.length) {
+        const hasToken = !!localStorage.getItem('admin_token');
         grid.innerHTML = `
       <div class="empty-state">
         <div class="empty-state-icon">🃏</div>
-        <p>No games yet. Create your first game!</p>
-        <button class="btn btn-primary" onclick="createNewGame()">✨ New Game</button>
+        <p>No games yet. ${hasToken ? 'Create your first game!' : 'Sign in as admin to create a game.'}</p>
+        ${hasToken ? '<button class="btn btn-primary" onclick="createNewGame()">✨ New Game</button>' : ''}
       </div>`;
         return;
     }
@@ -1009,8 +1027,72 @@ $('#btn-home-complete').addEventListener('click', goHome);
 $('#btn-new-game').addEventListener('click', createNewGame);
 $('#logo-home-btn').addEventListener('click', (e) => { e.preventDefault(); goHome(); });
 
+// ─── Google SSO Authentication ───────────────────────────────
+function handleCredentialResponse(response) {
+    if (response.credential) {
+        localStorage.setItem('admin_token', response.credential);
+        const payload = JSON.parse(atob(response.credential.split('.')[1]));
+        
+        $('#google-signin-container').style.display = 'none';
+        $('#btn-new-game').style.display = 'inline-flex';
+        
+        $('#admin-user-info').style.display = 'flex';
+        $('#admin-email-display').textContent = payload.email;
+        
+        showToast('Logged in as Admin: ' + payload.email, 'success');
+        loadHomeView(); // Refresh to show New Game button in empty state
+    }
+}
+
+$('#btn-admin-logout').addEventListener('click', () => {
+    localStorage.removeItem('admin_token');
+    $('#admin-user-info').style.display = 'none';
+    $('#google-signin-container').style.display = 'flex';
+    $('#btn-new-game').style.display = 'none';
+    showToast('Signed out', 'info');
+    goHome();
+});
+
+window.handleCredentialResponse = handleCredentialResponse;
+
+function restoreSession() {
+    const token = localStorage.getItem('admin_token');
+    if (token) {
+        try {
+            const payload = JSON.parse(atob(token.split('.')[1]));
+            if (payload.exp * 1000 > Date.now()) {
+                $('#google-signin-container').style.display = 'none';
+                $('#btn-new-game').style.display = 'inline-flex';
+                $('#admin-user-info').style.display = 'flex';
+                $('#admin-email-display').textContent = payload.email;
+            } else {
+                localStorage.removeItem('admin_token');
+            }
+        } catch(e) {
+            localStorage.removeItem('admin_token');
+        }
+    }
+}
+
 // Init: load home
 (async function init() {
+    try {
+        const config = await API.getConfig();
+        if (config.googleClientId && window.google) {
+            google.accounts.id.initialize({
+                client_id: config.googleClientId,
+                callback: handleCredentialResponse
+            });
+            google.accounts.id.renderButton(
+                $('#google-signin-btn'),
+                { theme: "outline", size: "large", type: "standard" }
+            );
+        }
+    } catch (e) {
+        console.error('Failed to load Google Client config', e);
+    }
+
+    restoreSession();
     showView('home');
     await loadHomeView();
 })();

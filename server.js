@@ -7,6 +7,7 @@ const { MongoClient } = require('mongodb');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const OpenAI = require('openai');
 const Anthropic = require('@anthropic-ai/sdk');
+const { OAuth2Client } = require('google-auth-library');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -44,19 +45,52 @@ function getAI() {
 }
 
 // =====================
+// Google OAuth Setup
+// =====================
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+
+async function requireAdmin(req, res, next) {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Unauthorized: No token provided' });
+    }
+    const token = authHeader.split(' ')[1];
+    try {
+        const ticket = await googleClient.verifyIdToken({
+            idToken: token,
+            audience: process.env.GOOGLE_CLIENT_ID,
+        });
+        const payload = ticket.getPayload();
+        req.user = payload;
+        
+        // Check allowed emails if ADMIN_EMAILS is set
+        const allowedEmails = process.env.ADMIN_EMAILS ? process.env.ADMIN_EMAILS.split(',').map(e => e.trim().toLowerCase()) : [];
+        if (allowedEmails.length > 0 && !allowedEmails.includes(payload.email.toLowerCase())) {
+            return res.status(403).json({ error: 'Forbidden: You are not authorized to be an admin.' });
+        }
+        next();
+    } catch (err) {
+        return res.status(401).json({ error: 'Unauthorized: Invalid token' });
+    }
+}
+
+// =====================
 // API Routes
 // =====================
 
+// All /api/games routes require admin authentication
+app.use('/api/games', requireAdmin);
+
 // GET /api/config — Return API key status
 app.get('/api/config', (req, res) => {
-    res.json({ hasApiKey: !!getAI() });
+    res.json({ hasApiKey: !!getAI(), googleClientId: process.env.GOOGLE_CLIENT_ID });
 });
 
-// GET /api/games — List all games (summary only)
+// GET /api/games — List all games (summary only, filtered by owner)
 app.get('/api/games', async (req, res) => {
     try {
         const games = await gamesCol()
-            .find({}, { projection: { id: 1, name: 1, status: 1, players: 1, categories: 1, createdAt: 1, updatedAt: 1 } })
+            .find({ createdBy: req.user.email }, { projection: { id: 1, name: 1, status: 1, players: 1, categories: 1, createdAt: 1, updatedAt: 1 } })
             .sort({ updatedAt: -1 })
             .toArray();
         const summary = games.map(g => ({
@@ -84,6 +118,7 @@ app.post('/api/games', async (req, res) => {
         status: 'configuring',
         players: [],
         categories: [],
+        createdBy: req.user.email,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
     };

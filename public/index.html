@@ -8,6 +8,7 @@
   <meta name="description"
     content="Host your own AI-powered Jeopardy game with custom topics, auto-generated questions, and live scoring." />
   <link rel="stylesheet" href="style.css" />
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 
 <body>
@@ -22,6 +23,10 @@
       <nav class="header-nav" id="header-nav">
         <!-- populated by JS -->
       </nav>
+      <div id="admin-user-info" style="display:none; color:var(--text-secondary); font-size:0.9rem; margin-left:1rem; align-items:center;">
+        <span id="admin-email-display" style="margin-right:0.5rem;"></span>
+        <button class="btn btn-ghost btn-sm" id="btn-admin-logout">Sign Out</button>
+      </div>
     </header>
 
     <!-- ═══════════════════════════════════════
@@ -31,9 +36,12 @@
       <div class="home-hero">
         <h1 class="home-title">JEOPARDY!</h1>
         <p class="hero-subtitle">AI-powered Jeopardy with custom topics, auto-generated questions, and live scoring.</p>
-        <button class="btn btn-gold btn-xl" id="btn-new-game">
+        <button class="btn btn-gold btn-xl" id="btn-new-game" style="display:none;">
           <span>✨</span> New Game
         </button>
+        <div id="google-signin-container" style="display: flex; justify-content: center; margin-top: 1.5rem;">
+          <div id="google-signin-btn"></div>
+        </div>
       </div>
 
       <div style="width:100%; max-width:1100px; margin:0 auto; padding:0 2rem 3rem; box-sizing: border-box;">
