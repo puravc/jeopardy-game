@@ -1,4 +1,5 @@
 require('dotenv').config();
+const http = require('http');
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -8,6 +9,15 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const OpenAI = require('openai');
 const Anthropic = require('@anthropic-ai/sdk');
 const { OAuth2Client } = require('google-auth-library');
+const { WebSocketServer } = require('ws');
+
+// Generate a short, human-readable join code
+function generateJoinCode() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let code = '';
+    for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+    return code;
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -112,16 +122,20 @@ app.get('/api/games', async (req, res) => {
 app.post('/api/games', async (req, res) => {
     const { name } = req.body;
     if (!name || !name.trim()) return res.status(400).json({ error: 'Game name is required' });
+    const playerMode = req.body.playerMode === 'manual' ? 'manual' : 'self_register';
     const newGame = {
         id: uuidv4(),
         name: name.trim(),
         status: 'configuring',
+        playerMode,
+        joinCode: playerMode === 'self_register' ? generateJoinCode() : null,
         players: [],
         categories: [],
         createdBy: req.user.email,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
     };
+
     try {
         await gamesCol().insertOne(newGame);
         res.status(201).json(newGame);
@@ -465,17 +479,172 @@ app.post('/api/games/:id/skip', async (req, res) => {
     }
 });
 
+// GET /api/join/:code — public player lookup by join code
+app.get('/api/join/:code', async (req, res) => {
+    try {
+        const game = await db.collection('games').findOne(
+            { joinCode: req.params.code.toUpperCase() },
+            { projection: { _id: 0, id: 1, name: 1, joinCode: 1, players: 1, status: 1 } }
+        );
+        if (!game) return res.status(404).json({ error: 'Game not found. Check your code.' });
+        if (game.status !== 'configuring') {
+            return res.status(403).json({ error: 'This game has already started. No new players can join.' });
+        }
+        res.json(game);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // Catch-all → serve SPA
 app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// =====================
+// WebSocket Buzzer Server
+// =====================
+// rooms: gameId -> { hostWs, players: Map<playerId, {ws, name}>, buzzerQueue: [], questionOpen: false }
+const rooms = new Map();
+
+function getOrCreateRoom(gameId) {
+    if (!rooms.has(gameId)) {
+        rooms.set(gameId, { hostWs: null, players: new Map(), buzzerQueue: [], questionOpen: false });
+    }
+    return rooms.get(gameId);
+}
+
+function broadcast(room, data) {
+    const msg = JSON.stringify(data);
+    if (room.hostWs && room.hostWs.readyState === 1) room.hostWs.send(msg);
+    room.players.forEach(p => { if (p.ws.readyState === 1) p.ws.send(msg); });
+}
+
+function broadcastPlayerList(room) {
+    const players = [...room.players.values()].map(p => ({ id: p.id, name: p.name }));
+    broadcast(room, { type: 'player_list', players });
+}
+
 // Start server
+const httpServer = http.createServer(app);
+const wss = new WebSocketServer({ server: httpServer });
+
+wss.on('connection', (ws) => {
+    let assignedGameId = null;
+    let assignedPlayerId = null;
+    let isHost = false;
+
+    ws.on('message', async (raw) => {
+        let msg;
+        try { msg = JSON.parse(raw); } catch { return; }
+
+        const { type, gameId, playerName, playerId } = msg;
+
+        if (type === 'host_join') {
+            assignedGameId = gameId;
+            isHost = true;
+            const room = getOrCreateRoom(gameId);
+            room.hostWs = ws;
+            ws.send(JSON.stringify({ type: 'host_joined', gameId }));
+            broadcastPlayerList(room);
+        }
+
+        else if (type === 'player_join') {
+            // Look up game and enforce join-lock after game starts
+            const game = await db.collection('games').findOne({ id: gameId }, { projection: { status: 1, playerMode: 1, players: 1 } });
+            if (!game) {
+                ws.send(JSON.stringify({ type: 'error', message: 'Game not found.' }));
+                return;
+            }
+            if (game.status !== 'configuring') {
+                ws.send(JSON.stringify({ type: 'error', message: 'This game has already started. You can no longer join.' }));
+                return;
+            }
+
+            assignedGameId = gameId;
+            assignedPlayerId = uuidv4();
+            const newPlayer = { id: assignedPlayerId, name: playerName, score: 0 };
+
+            // Persist player to MongoDB
+            await db.collection('games').updateOne(
+                { id: gameId },
+                { $push: { players: newPlayer }, $set: { updatedAt: new Date().toISOString() } }
+            );
+
+            const room = getOrCreateRoom(gameId);
+            room.players.set(assignedPlayerId, { ws, name: playerName, id: assignedPlayerId });
+            ws.send(JSON.stringify({ type: 'player_joined', playerId: assignedPlayerId, gameId,
+                questionOpen: room.questionOpen }));
+
+            // Refresh full player list from DB and broadcast
+            const updatedGame = await db.collection('games').findOne({ id: gameId }, { projection: { players: 1 } });
+            const allPlayers = updatedGame?.players || [];
+            // Broadcast both WS player list and a 'game_players_update' for the host UI
+            broadcastPlayerList(room);
+            if (room.hostWs && room.hostWs.readyState === 1) {
+                room.hostWs.send(JSON.stringify({ type: 'game_players_update', players: allPlayers }));
+            }
+        }
+
+
+        else if (type === 'open_question') {
+            const room = rooms.get(gameId);
+            if (!room) return;
+            room.buzzerQueue = [];
+            room.questionOpen = true;
+            broadcast(room, { type: 'question_open' });
+        }
+
+        else if (type === 'close_question') {
+            const room = rooms.get(gameId);
+            if (!room) return;
+            room.questionOpen = false;
+            broadcast(room, { type: 'question_closed' });
+        }
+
+        else if (type === 'buzz') {
+            const room = rooms.get(gameId);
+            if (!room || !room.questionOpen) return;
+            // prevent double-buzz from same player
+            if (room.buzzerQueue.some(b => b.playerId === playerId)) return;
+            room.buzzerQueue.push({ playerId, name: playerName, time: Date.now() });
+            broadcast(room, { type: 'buzzer_update', queue: room.buzzerQueue });
+        }
+    });
+
+    ws.on('close', async () => {
+        if (!assignedGameId) return;
+        const room = rooms.get(assignedGameId);
+        if (!room) return;
+        if (isHost) {
+            room.hostWs = null;
+        } else if (assignedPlayerId) {
+            room.players.delete(assignedPlayerId);
+            // Remove from DB if game is still configuring (pre-start)
+            try {
+                const game = await db.collection('games').findOne({ id: assignedGameId }, { projection: { status: 1 } });
+                if (game && game.status === 'configuring') {
+                    await db.collection('games').updateOne(
+                        { id: assignedGameId },
+                        { $pull: { players: { id: assignedPlayerId } } }
+                    );
+                    const updated = await db.collection('games').findOne({ id: assignedGameId }, { projection: { players: 1 } });
+                    if (room.hostWs && room.hostWs.readyState === 1) {
+                        room.hostWs.send(JSON.stringify({ type: 'game_players_update', players: updated?.players || [] }));
+                    }
+                }
+            } catch(e) { /* non-fatal */ }
+            broadcastPlayerList(room);
+        }
+    });
+});
+
 connectDB().then(() => {
-    app.listen(PORT, () => {
+    httpServer.listen(PORT, () => {
         console.log(`\n🎯 Jeopardy Game Server running at http://localhost:${PORT}`);
         const hasKey = process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY !== 'your_anthropic_api_key_here';
-        console.log(`🤖 Claude AI: ${hasKey ? '✅ Configured' : '❌ No API key — add ANTHROPIC_API_KEY to .env'}\n`);
+        console.log(`🤖 Claude AI: ${hasKey ? '✅ Configured' : '❌ No API key — add ANTHROPIC_API_KEY to .env'}`)
+        console.log(`🔔 WebSocket Buzzer: ✅ Ready\n`);
     });
 }).catch(err => {
     console.error('❌ Failed to connect to MongoDB:', err.message);

@@ -1911,3 +1911,44 @@ h3 {
         font-size: 1.1rem;
     }
 }
+
+/* ─── Game Mode Selection ─── */
+.mode-option-btn {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    width: 100%;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.1rem 1.25rem;
+    text-align: left;
+    cursor: pointer;
+    color: var(--text-primary);
+    transition: all var(--transition);
+    font-family: 'Inter', sans-serif;
+}
+
+.mode-option-btn:hover {
+    border-color: var(--gold);
+    background: rgba(255, 215, 0, 0.06);
+    transform: translateX(4px);
+}
+
+.mode-icon {
+    font-size: 2rem;
+    flex-shrink: 0;
+}
+
+.mode-title {
+    font-weight: 700;
+    font-size: 1rem;
+    margin-bottom: .2rem;
+    color: var(--text-primary);
+}
+
+.mode-desc {
+    font-size: .82rem;
+    color: var(--text-muted);
+    line-height: 1.4;
+}

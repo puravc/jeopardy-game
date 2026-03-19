@@ -10,6 +10,39 @@ const State = {
     activeModal: null, // { categoryId, questionId }
 };
 
+// ─── Host WebSocket ───────────────────────────────────────────
+const HostWS = {
+    ws: null,
+    connect(gameId) {
+        if (this.ws) this.ws.close();
+        const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+        this.ws = new WebSocket(`${proto}://${location.host}`);
+        this.ws.onopen = () => {
+            this.send({ type: 'host_join', gameId });
+        };
+        this.ws.onmessage = (e) => {
+            const msg = JSON.parse(e.data);
+            if (msg.type === 'buzzer_update') renderBuzzerQueue(msg.queue);
+            if (msg.type === 'player_list') renderWaitingPlayers(msg.players);
+            if (msg.type === 'game_players_update') {
+                // Refresh admin console player list and stats live
+                if (State.game) {
+                    State.game.players = msg.players;
+                    renderPlayerList(State.game);
+                    renderAdminStats(State.game);
+                    renderLaunchSection(State.game);
+                }
+            }
+        };
+    },
+    send(data) {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(data));
+    },
+    disconnect() {
+        if (this.ws) { this.ws.close(); this.ws = null; }
+    },
+};
+
 // ─── API Service ──────────────────────────────────────────────
 const API = {
     base: '/api',
@@ -37,7 +70,7 @@ const API = {
 
     // games
     listGames: () => API.get('/games'),
-    createGame: (name) => API.post('/games', { name }),
+    createGame: (name, playerMode) => API.post('/games', { name, playerMode }),
     getGame: (id) => API.get(`/games/${id}`),
     updateGame: (id, data) => API.put(`/games/${id}`, data),
     deleteGame: (id) => API.del(`/games/${id}`),
@@ -223,12 +256,19 @@ function escHtml(str) {
     return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-async function createNewGame() {
+// Show game mode selection modal
+function createNewGame() {
+    $('#game-mode-modal').classList.add('open');
+}
+
+// Called after mode is selected
+async function doCreateGame(playerMode) {
+    $('#game-mode-modal').classList.remove('open');
     const name = prompt('Game name:');
     if (!name || !name.trim()) return;
     showLoading('CREATING GAME...');
     try {
-        const game = await API.createGame(name.trim());
+        const game = await API.createGame(name.trim(), playerMode);
         State.currentGameId = game.id;
         State.game = game;
         await openAdminConsole(game.id);
@@ -238,6 +278,10 @@ async function createNewGame() {
         hideLoading();
     }
 }
+
+$('#btn-mode-self-register').addEventListener('click', () => doCreateGame('self_register'));
+$('#btn-mode-manual').addEventListener('click', () => doCreateGame('manual'));
+$('#btn-mode-cancel').addEventListener('click', () => $('#game-mode-modal').classList.remove('open'));
 
 async function deleteGame(id, e) {
     e.stopPropagation();
@@ -290,6 +334,7 @@ async function resumeGame(id) {
             await API.updateGame(id, { status: 'active' });
             State.game.status = 'active';
         }
+        HostWS.connect(id);
         showView('game');
         renderBoard(State.game);
     } catch (e) {
@@ -306,6 +351,10 @@ async function openAdminConsole(id) {
         const game = await API.getGame(id);
         State.currentGameId = id;
         State.game = game;
+        // Connect host WS for self_register mode so player joins appear live
+        if (game.playerMode === 'self_register') {
+            HostWS.connect(id);
+        }
         showView('admin');
         renderAdminConsole(game);
         showAdminSection('game-info');
@@ -323,6 +372,33 @@ function renderAdminConsole(game) {
     renderPlayerList(game);
     renderCategoryList(game);
     renderLaunchSection(game);
+
+    // Always show Players tab/section in both modes
+    const playersSection = $('#admin-players');
+    const playersNav = $('#nav-players');
+    playersSection.style.display = '';
+    playersNav.style.display = '';
+
+    // Show/hide manual add form based on player mode
+    const addPlayerForm = $('#add-player-form');
+    if (addPlayerForm) {
+        addPlayerForm.style.display = game.playerMode === 'self_register' ? 'none' : '';
+    }
+
+    // Show join code banner inside the players section for self_register
+    let banner = document.getElementById('self-register-banner');
+    if (game.playerMode === 'self_register') {
+        if (!banner) {
+            banner = document.createElement('div');
+            banner.id = 'self-register-banner';
+            banner.style.cssText = 'margin-bottom:1rem; padding:.75rem 1rem; background:rgba(255,215,0,0.07); border:1px solid rgba(255,215,0,0.25); border-radius:12px; font-size:.88rem; color:var(--text-secondary);';
+            const playerList = $('#player-list');
+            playerList.parentNode.insertBefore(banner, playerList);
+        }
+        banner.innerHTML = `📱 <strong>Self-Register:</strong> Players join via code <strong style="color:var(--gold);letter-spacing:.1em;font-size:1.1em">${game.joinCode}</strong> at <code>localhost:3000/buzzer.html</code>. They appear below as they join.`;
+    } else {
+        banner?.remove();
+    }
 }
 
 function renderAdminStats(game) {
@@ -336,7 +412,10 @@ function renderAdminStats(game) {
 function renderPlayerList(game) {
     const list = $('#player-list');
     if (!game.players.length) {
-        list.innerHTML = '<p class="text-muted text-sm">No players yet.</p>';
+        const msg = game.playerMode === 'self_register'
+            ? '<p class="text-muted text-sm">No players yet — waiting for players to join via the code above.</p>'
+            : '<p class="text-muted text-sm">No players yet.</p>';
+        list.innerHTML = msg;
         return;
     }
     list.innerHTML = game.players.map(p => `
@@ -345,7 +424,7 @@ function renderPlayerList(game) {
         <div class="player-avatar">${initials(p.name)}</div>
         <span class="player-name">${escHtml(p.name)}</span>
       </div>
-      <button class="btn btn-ghost btn-sm" onclick="removePlayer('${p.id}')">✕ Remove</button>
+      ${game.playerMode !== 'self_register' ? `<button class="btn btn-ghost btn-sm" onclick="removePlayer('${p.id}')">✕ Remove</button>` : ''}
     </div>
   `).join('');
 }
@@ -715,6 +794,7 @@ $('#btn-start-game').addEventListener('click', async () => {
     try {
         const game = await API.startGame(State.currentGameId);
         State.game = game;
+        HostWS.connect(State.currentGameId);
         showView('game');
         renderBoard(game);
         showToast("🎉 Game started! Let's play!", 'success');
@@ -744,6 +824,12 @@ $('#btn-reset-game').addEventListener('click', async () => {
 // ─── GAME BOARD ───────────────────────────────────────────────
 function renderBoard(game) {
     $('#game-board-title').textContent = game.name.toUpperCase();
+
+    // Show join code
+    if (game.joinCode) {
+        $('#join-code-value').textContent = game.joinCode;
+        $('#join-code-display').style.display = 'block';
+    }
 
     const grid = $('#board-grid');
     const categories = game.categories;
@@ -790,6 +876,62 @@ function renderBoard(game) {
     updateProgress(game);
 }
 
+function renderBuzzerQueue(queue) {
+    const medals = ['🥇', '🥈', '🥉'];
+
+    // ── Sidebar panel (game board) ──
+    const panel = $('#buzzer-queue');
+    const list = $('#buzzer-queue-list');
+    if (!queue || queue.length === 0) {
+        panel.style.display = 'none';
+    } else {
+        panel.style.display = 'block';
+        list.innerHTML = queue.map((b, i) =>
+            `<li style="font-size:.9rem; font-weight:${i===0?'700':'400'}; color:${i===0?'var(--gold)':'var(--text-secondary)'}">${medals[i] || (i+1)+'.'} ${escHtml(b.name)}</li>`
+        ).join('');
+    }
+
+    // ── Modal buzzer queue (shown when modal is open) ──
+    const modalPanel = $('#modal-buzzer-queue');
+    const modalList = $('#modal-buzzer-list');
+    const modalEmpty = $('#modal-buzzer-empty');
+
+    // Only show in the modal if we're in self_register mode
+    if (State.game?.playerMode !== 'self_register') {
+        modalPanel.style.display = 'none';
+        return;
+    }
+
+    modalPanel.style.display = 'block';
+    if (!queue || queue.length === 0) {
+        modalList.innerHTML = '';
+        modalEmpty.style.display = 'block';
+    } else {
+        modalEmpty.style.display = 'none';
+        modalList.innerHTML = queue.map((b, i) => `
+            <li style="
+                font-size:${i===0?'1.05rem':'.9rem'};
+                font-weight:${i===0?'700':'400'};
+                color:${i===0?'var(--gold)':'var(--text-secondary)'};
+                padding:${i===0?'.3rem .5rem':'0 .5rem'};
+                border-radius:${i===0?'6px':'0'};
+                background:${i===0?'rgba(255,215,0,0.08)':'transparent'};
+            ">
+                ${medals[i] || (i+1)+'.'} ${escHtml(b.name)}
+                ${i===0 ? '<span style="margin-left:.5rem;font-size:.75rem;color:var(--gold);opacity:.8">← answers now</span>' : ''}
+            </li>`).join('');
+    }
+}
+
+function renderWaitingPlayers(players) {
+    const el = $('#buzzer-waiting-players');
+    if (!players || players.length === 0) {
+        el.textContent = 'No players connected via buzzer.';
+    } else {
+        el.textContent = `${players.length} player${players.length !== 1 ? 's' : ''} connected: ${players.map(p => p.name).join(', ')}`;
+    }
+}
+
 function renderScoreboard(game) {
     const sorted = [...game.players].sort((a, b) => b.score - a.score);
     const maxScore = Math.max(...sorted.map(p => p.score), 1);
@@ -831,6 +973,10 @@ function openQuestionModal(catId, qId) {
     $('#modal-answer-text').textContent = q.answer;
     $('#modal-answer-reveal').classList.remove('visible');
 
+    // Signal players to open buzzers
+    HostWS.send({ type: 'open_question', gameId: State.currentGameId });
+    renderBuzzerQueue([]); // reset queue display
+
     // Player buttons
     const grid = $('#player-award-grid');
     grid.innerHTML = State.game.players.map(p => {
@@ -853,6 +999,8 @@ function openQuestionModal(catId, qId) {
 function closeModal() {
     $('#question-modal').classList.remove('open');
     State.activeModal = null;
+    // Signal players to close buzzers
+    HostWS.send({ type: 'close_question', gameId: State.currentGameId });
 }
 
 $('#modal-close-btn').addEventListener('click', closeModal);
