@@ -91,11 +91,21 @@ function handleMessage(msg) {
         case 'player_joined':
             myPlayerId = msg.playerId;
             questionIsOpen = msg.questionOpen;
+            
+            // Show header with my name
+            $('header-name').textContent = myName;
+            $('player-header').style.display = 'flex';
+            
             if (questionIsOpen) showBuzzerScreen(true);
             break;
 
         case 'player_list':
             renderPlayerList(msg.players);
+            // Also update my score from the list if it's there
+            const meJoined = msg.players.find(p => p.id === myPlayerId);
+            if (meJoined) {
+                $('header-score').textContent = `$${meJoined.score.toLocaleString()}`;
+            }
             break;
 
         case 'question_open':
@@ -121,6 +131,50 @@ function handleMessage(msg) {
                 renderBuzzedState(myBuzzPosition);
             }
             break;
+
+        case 'score_update':
+            // Update all players in list
+            renderPlayerList(msg.players);
+            
+            // Update my own score in header
+            const me = msg.players.find(p => p.id === myPlayerId);
+            if (me) {
+                $('header-score').textContent = `$${me.score.toLocaleString()}`;
+            }
+
+            // Show animation if an event occurred
+            if (msg.event) {
+                const targetPlayer = msg.players.find(p => p.id === msg.event.playerId);
+                if (targetPlayer) {
+                    showAwardAnimation(targetPlayer.name, msg.event.amount, msg.event.type);
+                }
+            }
+            break;
+    }
+}
+
+function showAwardAnimation(name, amount, type) {
+    const container = $('animation-container');
+    const div = document.createElement('div');
+    div.className = `award-notif ${type === 'deduct' ? 'deduct' : ''}`;
+    
+    const isMe = name === myName;
+    const displayName = isMe ? 'YOU' : name;
+    const sign = amount >= 0 ? '+' : '';
+    
+    div.innerHTML = `
+        <div class="award-target">${displayName}</div>
+        <div class="award-amount">${sign}$${Math.abs(amount).toLocaleString()}</div>
+    `;
+    
+    container.appendChild(div);
+    
+    // Remove after animation finishes
+    setTimeout(() => div.remove(), 2000);
+
+    // If it was me, maybe a little extra flair?
+    if (isMe && type === 'award') {
+        if (navigator.vibrate) navigator.vibrate([50, 30, 50, 30, 50]);
     }
 }
 
@@ -184,10 +238,20 @@ $('btn-buzzer').addEventListener('click', () => {
 // ── Player List ──
 function renderPlayerList(players) {
     const el = $('player-list');
-    if (!players.length) { el.innerHTML = '<span class="player-chip">No one else yet...</span>'; return; }
-    el.innerHTML = players.map(p =>
-        `<span class="player-chip${p.id === myPlayerId ? ' me' : ''}">${escHtml(p.name)}${p.id === myPlayerId ? ' (you)' : ''}</span>`
-    ).join('');
+    if (!players.length) { return; }
+    
+    // Show scoreboard section
+    $('section-scoreboard').style.display = 'block';
+
+    // Sort players by score descending
+    const sorted = [...players].sort((a, b) => b.score - a.score);
+    
+    el.innerHTML = sorted.map(p => `
+        <div class="player-row${p.id === myPlayerId ? ' me' : ''}">
+            <span class="p-name">${escHtml(p.name)}${p.id === myPlayerId ? ' (you)' : ''}</span>
+            <span class="p-score">$${p.score.toLocaleString()}</span>
+        </div>
+    `).join('');
 }
 
 function escHtml(str) {

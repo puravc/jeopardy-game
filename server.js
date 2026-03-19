@@ -370,6 +370,15 @@ app.post('/api/games/:id/reset', async (req, res) => {
             { $set: { status: 'configuring', players: resetPlayers, categories: resetCategories, updatedAt: new Date().toISOString() } },
             { returnDocument: 'after', projection: { _id: 0 } }
         );
+
+        const room = rooms.get(req.params.id);
+        if (room) {
+            broadcast(room, {
+                type: 'score_update',
+                players: resetPlayers
+            });
+        }
+
         res.json(updated);
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -405,6 +414,16 @@ app.post('/api/games/:id/award', async (req, res) => {
             { $set: { categories: updatedCategories, players: updatedPlayers, status: newStatus, updatedAt: new Date().toISOString() } },
             { returnDocument: 'after', projection: { _id: 0 } }
         );
+
+        const room = rooms.get(req.params.id);
+        if (room) {
+            broadcast(room, {
+                type: 'score_update',
+                players: updatedPlayers,
+                event: { type: 'award', playerId, amount: q.value }
+            });
+        }
+
         res.json(updated);
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -447,6 +466,16 @@ app.post('/api/games/:id/deduct', async (req, res) => {
             { $set: { categories: updatedCategories, players: updatedPlayers, status: newStatus, updatedAt: new Date().toISOString() } },
             { returnDocument: 'after', projection: { _id: 0 } }
         );
+
+        const room = rooms.get(req.params.id);
+        if (room) {
+            broadcast(room, {
+                type: 'score_update',
+                players: updatedPlayers,
+                event: { type: 'deduct', playerId, amount: -q.value }
+            });
+        }
+
         res.json(updated);
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -473,6 +502,15 @@ app.post('/api/games/:id/skip', async (req, res) => {
             { $set: { categories: updatedCategories, status: newStatus, updatedAt: new Date().toISOString() } },
             { returnDocument: 'after', projection: { _id: 0 } }
         );
+
+        const room = rooms.get(req.params.id);
+        if (room) {
+            broadcast(room, {
+                type: 'score_update',
+                players: game.players // Scores don't change on skip, but keeps state in sync
+            });
+        }
+
         res.json(updated);
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -520,8 +558,11 @@ function broadcast(room, data) {
     room.players.forEach(p => { if (p.ws.readyState === 1) p.ws.send(msg); });
 }
 
-function broadcastPlayerList(room) {
-    const players = [...room.players.values()].map(p => ({ id: p.id, name: p.name }));
+async function broadcastPlayerList(gameId) {
+    const room = rooms.get(gameId);
+    if (!room) return;
+    const game = await db.collection('games').findOne({ id: gameId }, { projection: { players: 1 } });
+    const players = game?.players || [];
     broadcast(room, { type: 'player_list', players });
 }
 
@@ -546,7 +587,7 @@ wss.on('connection', (ws) => {
             const room = getOrCreateRoom(gameId);
             room.hostWs = ws;
             ws.send(JSON.stringify({ type: 'host_joined', gameId }));
-            broadcastPlayerList(room);
+            await broadcastPlayerList(gameId);
         }
 
         else if (type === 'player_join') {
@@ -580,7 +621,7 @@ wss.on('connection', (ws) => {
             const updatedGame = await db.collection('games').findOne({ id: gameId }, { projection: { players: 1 } });
             const allPlayers = updatedGame?.players || [];
             // Broadcast both WS player list and a 'game_players_update' for the host UI
-            broadcastPlayerList(room);
+            await broadcastPlayerList(gameId);
             if (room.hostWs && room.hostWs.readyState === 1) {
                 room.hostWs.send(JSON.stringify({ type: 'game_players_update', players: allPlayers }));
             }
@@ -634,7 +675,7 @@ wss.on('connection', (ws) => {
                     }
                 }
             } catch(e) { /* non-fatal */ }
-            broadcastPlayerList(room);
+            await broadcastPlayerList(assignedGameId);
         }
     });
 });

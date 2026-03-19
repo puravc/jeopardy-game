@@ -11,6 +11,13 @@
 </head>
 <body>
 
+  <!-- ── SHARED UI ── -->
+  <div id="player-header" class="player-header" style="display:none">
+    <div id="header-name" class="header-name"></div>
+    <div id="header-score" class="header-score">$0</div>
+  </div>
+  <div id="animation-container" class="animation-container"></div>
+
   <!-- ── JOIN SCREEN ── -->
   <div id="screen-join" class="screen active">
     <div class="join-card">
@@ -32,9 +39,13 @@
       <div class="waiting-icon">⏳</div>
       <h2>Waiting for host<span class="dots">...</span></h2>
       <p class="sub">A question will appear when the host opens one.</p>
-      <div class="player-list-label">Players in room:</div>
-      <div id="player-list" class="player-list"></div>
     </div>
+  </div>
+
+  <!-- ── SCOREBOARD (SHARED) ── -->
+  <div id="section-scoreboard" class="scoreboard-container" style="display:none">
+    <div class="player-list-label">STANDINGS</div>
+    <div id="player-list" class="player-list"></div>
   </div>
 
   <!-- ── BUZZER SCREEN ── -->
