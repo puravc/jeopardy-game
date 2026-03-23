@@ -9,6 +9,7 @@ let myName = null;
 let myGameId = null;
 let questionIsOpen = false;
 let myBuzzPosition = null;
+let buzzerTimerInt = null;
 
 // ── DOM helpers ──
 const $ = (id) => document.getElementById(id);
@@ -112,11 +113,13 @@ function handleMessage(msg) {
             questionIsOpen = true;
             myBuzzPosition = null;
             showBuzzerScreen(true);
+            startBuzzerTimer(msg.timeoutAt);
             break;
 
         case 'question_closed':
             questionIsOpen = false;
             showBuzzerScreen(false);
+            stopBuzzerTimer();
             // Go back to waiting after short delay
             setTimeout(() => {
                 showScreen('waiting');
@@ -125,6 +128,7 @@ function handleMessage(msg) {
             break;
 
         case 'buzzer_update':
+            if (msg.queue && msg.queue.length > 0) stopBuzzerTimer();
             const pos = msg.queue.findIndex(b => b.playerId === myPlayerId);
             if (pos !== -1) {
                 myBuzzPosition = pos + 1;
@@ -256,4 +260,28 @@ function renderPlayerList(players) {
 
 function escHtml(str) {
     return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function startBuzzerTimer(timeoutAt) {
+    const container = $('buzzer-timer-container');
+    const span = $('buzzer-timer');
+    if (!container || !span || !timeoutAt) return;
+    
+    container.style.display = 'block';
+    
+    clearInterval(buzzerTimerInt);
+    buzzerTimerInt = setInterval(() => {
+        const remaining = Math.max(0, Math.ceil((timeoutAt - Date.now()) / 1000));
+        span.textContent = remaining;
+        if (remaining <= 0) {
+            clearInterval(buzzerTimerInt);
+            span.style.color = '#ff4444';
+        } else {
+            span.style.color = 'var(--text-primary)';
+        }
+    }, 100);
+}
+
+function stopBuzzerTimer() {
+    clearInterval(buzzerTimerInt);
 }

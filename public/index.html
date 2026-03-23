@@ -15,8 +15,8 @@
 <body>
   <div class="app-wrapper">
 
-    <!-- ─── Global Header ─── -->
-    <header class="app-header" id="app-header">
+    <!-- ─── Global Header (shown only when logged in / non-home views) ─── -->
+    <header class="app-header" id="app-header" style="display:none;">
       <a href="#" class="logo" id="logo-home-btn">
         <div class="logo-icon">🎯</div>
         <span class="logo-text">JEOPARDY!</span>
@@ -34,30 +34,170 @@
        VIEW: HOME
        ═══════════════════════════════════════ -->
     <div id="view-home" class="view">
-      <div class="home-hero">
-        <h1 class="home-title">JEOPARDY!</h1>
-        <p class="hero-subtitle">AI-powered Jeopardy with custom topics, auto-generated questions, and live scoring.</p>
-        <button class="btn btn-gold btn-xl" id="btn-new-game" style="display:none;">
-          <span>✨</span> New Game
-        </button>
-        <div id="google-signin-container" style="display: flex; justify-content: center; margin-top: 1.5rem;">
-          <div id="google-signin-btn"></div>
-        </div>
-      </div>
 
-      <div style="width:100%; max-width:1100px; margin:0 auto; padding:0 2rem 3rem; box-sizing: border-box;">
-        <div class="flex justify-between items-center mb-2">
-          <h2 style="font-size:1.4rem; color:var(--text-secondary);">SAVED GAMES</h2>
-          <span class="text-muted text-sm" id="games-count"></span>
-        </div>
-        <div class="games-grid" id="games-grid">
-          <div class="empty-state">
-            <div class="empty-state-icon">🃏</div>
-            <p>No games yet. Create your first game to get started!</p>
-            <button class="btn btn-primary" id="btn-new-game-empty">✨ New Game</button>
+      <!-- ── LANDING PAGE (pre-login) ── -->
+      <div id="landing-page">
+
+        <!-- Landing Nav -->
+        <nav class="landing-nav" id="landing-nav">
+          <a href="#" class="landing-logo" id="landing-logo-btn">
+            <div class="landing-logo-icon">🎯</div>
+            <span class="landing-logo-text">JEOPARDY LIVE</span>
+          </a>
+          <div class="landing-nav-links">
+            <a href="#features" class="landing-nav-link">Features</a>
+            <a href="#how-it-works" class="landing-nav-link">How It Works</a>
+          </div>
+          <div id="google-signin-container" style="display:flex; align-items:center;">
+            <div id="google-signin-btn"></div>
+          </div>
+        </nav>
+
+        <!-- Hero Section -->
+        <section class="landing-hero" id="hero">
+          <div class="hero-bg-orb hero-orb-1"></div>
+          <div class="hero-bg-orb hero-orb-2"></div>
+          <div class="hero-bg-orb hero-orb-3"></div>
+          <div class="hero-content">
+            <div class="hero-eyebrow">JEOPARDY</div>
+            <h1 class="hero-headline">
+              The Ultimate<br>
+              <em class="hero-gold">Trivia</em> Experience
+            </h1>
+            <p class="hero-tagline">Step into the spotlight. Host and play high-stakes Jeopardy&#8209;style games with the full energy of a live broadcast.</p>
+            <div class="hero-cta-group">
+              <a href="#cta" class="btn btn-gold btn-xl hero-cta-primary">Get Started</a>
+              <a href="#features" class="btn btn-outline-hero btn-xl">Learn More</a>
+            </div>
+          </div>
+          <div class="hero-board-preview">
+            <div class="hero-board-grid">
+              <div class="hb-cat">Science</div>
+              <div class="hb-cat">History</div>
+              <div class="hb-cat">Pop Culture</div>
+              <div class="hb-tile hb-tile--answered"></div>
+              <div class="hb-tile" style="--delay:0.1s">$200</div>
+              <div class="hb-tile" style="--delay:0.2s">$200</div>
+              <div class="hb-tile" style="--delay:0.3s">$400</div>
+              <div class="hb-tile hb-tile--active" style="--delay:0.4s">$400</div>
+              <div class="hb-tile" style="--delay:0.5s">$400</div>
+              <div class="hb-tile" style="--delay:0.6s">$600</div>
+              <div class="hb-tile" style="--delay:0.7s">$600</div>
+              <div class="hb-tile hb-tile--answered"></div>
+              <div class="hb-tile" style="--delay:0.9s">$800</div>
+              <div class="hb-tile" style="--delay:1.0s">$800</div>
+              <div class="hb-tile hb-tile--answered"></div>
+              <div class="hb-tile" style="--delay:1.2s">$1000</div>
+              <div class="hb-tile" style="--delay:1.3s">$1000</div>
+              <div class="hb-tile hb-tile--answered"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Features Section -->
+        <section class="landing-features" id="features">
+          <div class="landing-section-inner">
+            <div class="landing-section-header">
+              <h2 class="landing-section-title">Production <span class="text-gold">Value</span> In Every Click</h2>
+              <p class="landing-section-sub">We didn't just build a game; we built a broadcast studio in your browser.</p>
+            </div>
+            <div class="features-grid">
+              <div class="feature-card">
+                <div class="feature-icon">✨</div>
+                <h3 class="feature-title">Custom Question Generation</h3>
+                <p class="feature-desc">Our AI generates professional-grade clues across any topic, ensuring your game is always fresh and challenging.</p>
+              </div>
+              <div class="feature-card">
+                <div class="feature-icon">👥</div>
+                <h3 class="feature-title">Massive Multiplayer</h3>
+                <p class="feature-desc">Connect up to 50 players in real-time. Zero lag, instant buzzer responses, and dynamic leaderboards.</p>
+              </div>
+              <div class="feature-card">
+                <div class="feature-icon">🎙️</div>
+                <h3 class="feature-title">Easy Hosting</h3>
+                <p class="feature-desc">Control the stage with a dedicated host dashboard. Trigger sound effects, manage scores, and keep the energy flowing.</p>
+              </div>
+              <div class="feature-card">
+                <div class="feature-icon">📺</div>
+                <h3 class="feature-title">TV-Ready Graphics</h3>
+                <p class="feature-desc">Every game looks like a million-dollar production with cinematic animations and sharp typography.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- How It Works Section -->
+        <section class="landing-how" id="how-it-works">
+          <div class="landing-section-inner">
+            <div class="landing-section-header">
+              <h2 class="landing-section-title">How to <em class="text-gold">Win</em></h2>
+              <div class="landing-divider"></div>
+            </div>
+            <div class="how-steps">
+              <div class="how-step">
+                <div class="how-step-num">01</div>
+                <h3 class="how-step-title">Create Your Stage</h3>
+                <p class="how-step-desc">Choose your theme. Our AI generates a balanced board across 6 categories. Customize every clue and $ value.</p>
+              </div>
+              <div class="how-step-arrow">→</div>
+              <div class="how-step">
+                <div class="how-step-num">02</div>
+                <h3 class="how-step-title">Invite the Audience</h3>
+                <p class="how-step-desc">Share your unique room code. Players join instantly from any device — no app download or login required to play.</p>
+              </div>
+              <div class="how-step-arrow">→</div>
+              <div class="how-step">
+                <div class="how-step-num">03</div>
+                <h3 class="how-step-title">Host the Broadcast</h3>
+                <p class="how-step-desc">Take the mic. Control the pace, read the clues with Wisecracker precision, and crown your game champion.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- CTA Section -->
+        <section class="landing-cta" id="cta">
+          <div class="landing-section-inner">
+            <h2 class="cta-title">Ready to <em class="text-gold">Play?</em></h2>
+            <p class="cta-sub">Sign in to start hosting high-impact trivia events every single day.</p>
+            <div class="cta-signin-wrap" id="cta-signin-area">
+              <!-- Google button cloned here by JS if needed; or just link to top -->
+              <a href="#hero" class="btn btn-gold btn-xl">Get Started →</a>
+            </div>
+          </div>
+          <div class="cta-bg-glow"></div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="landing-footer">
+          <div class="landing-footer-inner">
+            <span class="landing-logo-text" style="font-size:1rem; opacity:0.7;">JEOPARDY LIVE</span>
+            <span class="footer-copy">© 2024 The Daily Broadcast. All rights reserved.</span>
+          </div>
+        </footer>
+
+      </div><!-- /#landing-page -->
+
+      <!-- ── GAMES DASHBOARD (post-login) ── -->
+      <div id="games-dashboard" style="display:none; padding:2rem;">
+        <div style="width:100%; max-width:1100px; margin:0 auto; box-sizing:border-box;">
+          <div class="flex justify-between items-center mb-2">
+            <h2 style="font-size:1.4rem; color:var(--text-secondary);">SAVED GAMES</h2>
+            <div style="display:flex; align-items:center; gap:1rem;">
+              <span class="text-muted text-sm" id="games-count"></span>
+              <button class="btn btn-gold" id="btn-new-game">✨ New Game</button>
+            </div>
+          </div>
+          <div class="games-grid" id="games-grid">
+            <div class="empty-state">
+              <div class="empty-state-icon">🃏</div>
+              <p>No games yet. Create your first game to get started!</p>
+              <button class="btn btn-primary" id="btn-new-game-empty">✨ New Game</button>
+            </div>
           </div>
         </div>
-      </div>
+      </div><!-- /#games-dashboard -->
+
     </div>
 
     <!-- ═══════════════════════════════════════
@@ -217,6 +357,7 @@
 
           <div class="game-controls">
             <p class="sidebar-section-title">⚙️ Controls</p>
+            <button class="btn btn-gold btn-sm" id="btn-final-jeopardy" style="display:none; margin-bottom: 0.5rem;">🎯 Final Jeopardy</button>
             <button class="btn btn-ghost btn-sm" id="btn-pause-game">⏸ Pause &amp; Save</button>
             <button class="btn btn-ghost btn-sm" id="btn-back-admin">← Back to Admin</button>
           </div>
@@ -251,6 +392,25 @@
           <!-- populated -->
         </div>
 
+        <div id="complete-stats-container" style="margin-top:2rem; background:rgba(0,0,0,0.2); border:1px solid rgba(255,255,255,0.1); border-radius:12px; padding:1.5rem;">
+          <h3 style="font-size:1.1rem; color:var(--text-secondary); margin-bottom:1rem; text-align:left;">PLAYER STATS</h3>
+          <table style="width:100%; border-collapse:collapse; text-align:left; font-size:0.95rem;">
+            <thead>
+              <tr style="border-bottom:1px solid rgba(255,255,255,0.1); color:var(--text-muted);">
+                <th style="padding:.5rem;">#</th>
+                <th style="padding:.5rem;">Player</th>
+                <th style="padding:.5rem;">Final Score</th>
+                <th style="padding:.5rem;">Answered</th>
+                <th style="padding:.5rem;">Accuracy</th>
+                <th style="padding:.5rem;">Points Earned</th>
+              </tr>
+            </thead>
+            <tbody id="complete-stats-tbody">
+              <!-- populated -->
+            </tbody>
+          </table>
+        </div>
+
         <div class="complete-actions">
           <button class="btn btn-gold btn-xl" id="btn-play-again">🔄 Play Again</button>
           <button class="btn btn-ghost btn-lg" id="btn-home-complete">🏠 Home</button>
@@ -267,6 +427,11 @@
       <div class="modal-category" id="modal-cat-name"></div>
       <div class="modal-value" id="modal-value"></div>
       <div class="modal-question" id="modal-question"></div>
+
+      <!-- Admin Timer -->
+      <div id="admin-timer-container" style="display:none; text-align:center; margin-bottom:1rem; font-family:'Bebas Neue',sans-serif; font-size:4rem; color:var(--gold);">
+        <span id="admin-timer">15</span><span style="font-size:1.5rem; color:var(--text-muted); margin-left:5px;">s</span>
+      </div>
 
       <div class="modal-answer-reveal" id="modal-answer-reveal">
         <div class="modal-answer-label">Answer</div>
@@ -291,6 +456,51 @@
           <button class="btn btn-ghost" id="btn-reveal-answer">👁 Reveal Answer</button>
           <button class="btn btn-danger" id="btn-skip-question">⏭ Skip (No Points)</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── Final Jeopardy Modal ─── -->
+  <div class="modal-overlay" id="fj-modal">
+    <div class="modal" style="max-width:650px;">
+      <button class="modal-close" id="fj-close-btn">✕</button>
+      <h2 style="font-family:'Bebas Neue',sans-serif; font-size:2.5rem; letter-spacing:.05em; color:var(--gold); text-align:center; margin-bottom:1.5rem">FINAL JEOPARDY</h2>
+      
+      <!-- Step 1: Question Setup -->
+      <div class="fj-step" id="fj-step-1">
+        <p style="color:var(--text-muted); margin-bottom:1rem; text-align:center;">Step 1: Enter the final clue and answer.</p>
+        <div class="form-group">
+          <label class="form-label">Clue / Question</label>
+          <textarea id="fj-input-question" class="form-input" rows="3" placeholder="Enter Final Jeopardy clue..."></textarea>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Answer</label>
+          <input type="text" id="fj-input-answer" class="form-input" placeholder="Enter answer..." />
+        </div>
+        <button class="btn btn-gold" id="btn-fj-next-1" style="width:100%; margin-top:1rem;">Next: Collect Wagers →</button>
+      </div>
+
+      <!-- Step 2: Wagers -->
+      <div class="fj-step" id="fj-step-2" style="display:none;">
+        <p style="color:var(--text-muted); margin-bottom:1rem; text-align:center;">Step 2: Enter wager amounts for each player.</p>
+        <div id="fj-wager-grid" style="display:flex; flex-direction:column; gap:0.5rem; margin-bottom:1.5rem;">
+          <!-- populated -->
+        </div>
+        <button class="btn btn-gold" id="btn-fj-submit-wagers" style="width:100%;">Submit Wagers →</button>
+      </div>
+
+      <!-- Step 3: Reveal & Resolve -->
+      <div class="fj-step" id="fj-step-3" style="display:none;">
+        <p style="color:var(--text-muted); margin-bottom:1rem; text-align:center;">Step 3: Reveal answer and score players.</p>
+        <div style="background:rgba(255,255,255,0.05); padding:1rem; border-radius:8px; margin-bottom:1.5rem; text-align:center;">
+            <div id="fj-display-question" style="font-size:1.2rem; font-weight:bold; margin-bottom:1rem;"></div>
+            <button class="btn btn-ghost btn-sm" id="btn-fj-reveal">👁 Reveal Answer</button>
+            <div id="fj-display-answer" class="modal-answer-reveal" style="margin-top:1rem; padding-top:1rem; border-top:1px solid rgba(255,255,255,0.1);"></div>
+        </div>
+        <div id="fj-resolve-grid" style="display:flex; flex-direction:column; gap:0.5rem; margin-bottom:1.5rem;">
+          <!-- populated -->
+        </div>
+        <button class="btn btn-gold" id="btn-fj-finish" style="width:100%;">Finish Game 🏆</button>
       </div>
     </div>
   </div>

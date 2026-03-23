@@ -8,6 +8,7 @@ const State = {
     currentGameId: null,
     game: null,
     activeModal: null, // { categoryId, questionId }
+    questionTimerInt: null,
 };
 
 // ─── Host WebSocket ───────────────────────────────────────────
@@ -22,7 +23,12 @@ const HostWS = {
         };
         this.ws.onmessage = (e) => {
             const msg = JSON.parse(e.data);
-            if (msg.type === 'buzzer_update') renderBuzzerQueue(msg.queue);
+            if (msg.type === 'buzzer_update') {
+               if (msg.queue && msg.queue.length > 0) stopAdminTimer();
+               renderBuzzerQueue(msg.queue);
+            }
+            if (msg.type === 'question_open') startAdminTimer(msg.timeoutAt);
+            if (msg.type === 'question_closed') stopAdminTimer();
             if (msg.type === 'player_list') renderWaitingPlayers(msg.players);
             if (msg.type === 'game_players_update') {
                 // Refresh admin console player list and stats live
@@ -98,6 +104,15 @@ const API = {
         API.post(`/games/${id}/deduct`, { questionId, playerId, categoryId }),
     skipQuestion: (id, questionId, categoryId) =>
         API.post(`/games/${id}/skip`, { questionId, categoryId }),
+
+    // Game Cloning
+    cloneGame: (id, name) => API.post(`/games/${id}/clone`, { name }),
+
+    // Final Jeopardy
+    finalJeopardySetup: (id, question, answer, wagers) =>
+        API.post(`/games/${id}/final-jeopardy`, { question, answer, wagers }),
+    finalJeopardyResolve: (id, correct, wrong) =>
+        API.post(`/games/${id}/final-jeopardy/resolve`, { correct, wrong }),
 };
 
 // ─── Utilities ────────────────────────────────────────────────
@@ -139,7 +154,32 @@ function animateScoreFly(x, y, value) {
     el.style.left = x + 'px';
     el.style.top = y + 'px';
     document.body.appendChild(el);
-    setTimeout(() => el.remove(), 1600);
+
+    setTimeout(() => el.remove(), 1200);
+}
+
+function startAdminTimer(timeoutAt) {
+    const container = $('#admin-timer-container');
+    const span = $('#admin-timer');
+    if (!container || !span) return;
+    container.style.display = 'block';
+    
+    clearInterval(State.questionTimerInt);
+    State.questionTimerInt = setInterval(() => {
+        const remaining = Math.max(0, Math.ceil((timeoutAt - Date.now()) / 1000));
+        span.textContent = remaining;
+        if (remaining <= 0) {
+            clearInterval(State.questionTimerInt);
+            span.style.color = '#ff4444'; // Red when out of time
+        } else {
+            span.style.color = 'var(--gold)';
+        }
+    }, 100);
+}
+
+function stopAdminTimer() {
+    clearInterval(State.questionTimerInt);
+    // Keep it visible but stopped so host can see it if someone buzzed
 }
 
 // ─── View Router ─────────────────────────────────────────────
@@ -155,7 +195,11 @@ function showView(name) {
 
 function updateHeaderNav(view) {
     const nav = $('#header-nav');
+    const header = $('#app-header');
     nav.innerHTML = '';
+
+    // Show/hide the main app-header based on view
+    if (header) header.style.display = (view === 'home') ? 'none' : 'flex';
 
     if (view === 'admin' || view === 'game' || view === 'complete') {
         const homeBtn = document.createElement('button');
@@ -182,25 +226,24 @@ async function goHome() {
     await loadHomeView();
 }
 
+function showLandingOrDashboard() {
+    const isLoggedIn = !!localStorage.getItem('admin_token');
+    const landing = $('#landing-page');
+    const dashboard = $('#games-dashboard');
+    const header = $('#app-header');
+    if (landing) landing.style.display = isLoggedIn ? 'none' : 'block';
+    if (dashboard) dashboard.style.display = isLoggedIn ? 'block' : 'none';
+    if (header) header.style.display = isLoggedIn ? 'flex' : 'none';
+}
+
 async function loadHomeView() {
-    if (!localStorage.getItem('admin_token')) {
-        // Not signed in — hide the games section
-        const grid = $('#games-grid');
-        const count = $('#games-count');
-        count.textContent = '';
-        grid.innerHTML = `
-      <div class="empty-state">
-        <div class="empty-state-icon">🔐</div>
-        <p>Sign in as admin to view and manage your games.</p>
-      </div>`;
-        return;
-    }
+    showLandingOrDashboard();
+    if (!localStorage.getItem('admin_token')) return;
     try {
         const games = await API.listGames();
         renderGamesList(games);
     } catch (e) {
         showToast('Failed to load games: ' + e.message, 'error');
-
     }
 }
 
@@ -241,10 +284,27 @@ function renderGamesList(games) {
                 : `<button class="btn btn-primary btn-sm" onclick="openGame('${g.id}')">⚙️ Configure</button>`
         }
         <button class="btn btn-ghost btn-sm" onclick="openGame('${g.id}')">✏️ Edit</button>
+        <button class="btn btn-ghost btn-sm" onclick="duplicateGame('${g.id}')" title="Duplicate Game & Categories">📋 Duplicate</button>
         <button class="btn btn-danger btn-sm" onclick="deleteGame('${g.id}', event)">🗑</button>
       </div>
     </div>
   `).join('');
+}
+
+async function duplicateGame(id) {
+    event.stopPropagation();
+    const name = prompt('Enter a name for the new cloned game:');
+    if (!name || !name.trim()) return;
+    showLoading('CLONING GAME...');
+    try {
+        await API.cloneGame(id, name.trim());
+        showToast('Game duplicated successfully', 'success');
+        await loadHomeView();
+    } catch (e) {
+        showToast(e.message, 'error');
+    } finally {
+        hideLoading();
+    }
 }
 
 function statusLabel(s) {
@@ -874,6 +934,18 @@ function renderBoard(game) {
 
     renderScoreboard(game);
     updateProgress(game);
+
+    // Final Jeopardy Button logic
+    const totalQ = game.categories.reduce((s, c) => s + c.questions.length, 0);
+    const answeredCount = game.categories.reduce((s, c) => s + c.questions.filter(q => q.answered).length, 0);
+    const btnFJ = $('#btn-final-jeopardy');
+    if (btnFJ) {
+        if (answeredCount > 0 && game.status === 'active') {
+            btnFJ.style.display = 'inline-block';
+        } else {
+            btnFJ.style.display = 'none';
+        }
+    }
 }
 
 function renderBuzzerQueue(queue) {
@@ -1001,6 +1073,9 @@ function closeModal() {
     State.activeModal = null;
     // Signal players to close buzzers
     HostWS.send({ type: 'close_question', gameId: State.currentGameId });
+    
+    const timerContainer = $('#admin-timer-container');
+    if (timerContainer) timerContainer.style.display = 'none';
 }
 
 $('#modal-close-btn').addEventListener('click', closeModal);
@@ -1122,6 +1197,139 @@ $('#btn-back-admin').addEventListener('click', async () => {
     await openAdminConsole(State.currentGameId);
 });
 
+// ─── FINAL JEOPARDY ───────────────────────────────────────────
+function openFinalJeopardyModal() {
+    if (State.game.status !== 'active') return;
+    State.activeModal = { type: 'final_jeopardy' };
+    $('#fj-modal').classList.add('open');
+    showFJStep(1);
+    $('#fj-input-question').value = '';
+    $('#fj-input-answer').value = '';
+}
+
+function closeFJModal() {
+    $('#fj-modal').classList.remove('open');
+    State.activeModal = null;
+}
+
+function showFJStep(stepNum) {
+    $$('.fj-step').forEach(el => el.style.display = 'none');
+    $(`#fj-step-${stepNum}`).style.display = 'block';
+}
+
+$('#btn-final-jeopardy')?.addEventListener('click', openFinalJeopardyModal);
+$('#fj-close-btn')?.addEventListener('click', closeFJModal);
+
+// Step 1 -> 2
+$('#btn-fj-next-1')?.addEventListener('click', () => {
+    const q = $('#fj-input-question').value.trim();
+    const a = $('#fj-input-answer').value.trim();
+    if (!q || !a) {
+        showToast('Please enter both question and answer', 'warning');
+        return;
+    }
+    // Render wager inputs
+    const grid = $('#fj-wager-grid');
+    grid.innerHTML = State.game.players.map(p => `
+        <div class="fj-wager-row">
+            <span class="fj-wager-name">${escHtml(p.name)} ($${p.score})</span>
+            <input type="number" class="form-input fj-wager-input" data-pid="${p.id}" min="0" max="${Math.max(0, p.score)}" placeholder="Wager" />
+        </div>
+    `).join('');
+    showFJStep(2);
+});
+
+// Step 2 -> 3
+$('#btn-fj-submit-wagers')?.addEventListener('click', async () => {
+    const q = $('#fj-input-question').value.trim();
+    const a = $('#fj-input-answer').value.trim();
+    const wagers = {};
+    let valid = true;
+    $$('.fj-wager-input').forEach(input => {
+        const amt = parseInt(input.value) || 0;
+        const max = parseInt(input.max) || 0;
+        if (amt < 0 || amt > max) valid = false;
+        wagers[input.dataset.pid] = amt;
+    });
+    if (!valid) {
+        showToast('Invalid wager amount(s)', 'error');
+        return;
+    }
+    
+    const btn = $('#btn-fj-submit-wagers');
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+    try {
+        await API.finalJeopardySetup(State.currentGameId, q, a, wagers);
+        // Render resolve step
+        $('#fj-display-question').textContent = q;
+        $('#fj-display-answer').textContent = a;
+        $('#fj-display-answer').classList.remove('revealed');
+        
+        const rGrid = $('#fj-resolve-grid');
+        rGrid.innerHTML = State.game.players.map(p => `
+            <div class="fj-resolve-row" data-pid="${p.id}">
+                <span class="fj-resolve-name">${escHtml(p.name)} (Wager: $${wagers[p.id] || 0})</span>
+                <div class="fj-resolve-actions">
+                    <button class="btn btn-outline-success btn-sm btn-fj-correct" onclick="toggleFJChoice(this, 'correct')">✅</button>
+                    <button class="btn btn-outline-danger btn-sm btn-fj-wrong" onclick="toggleFJChoice(this, 'wrong')">❌</button>
+                </div>
+            </div>
+        `).join('');
+        showFJStep(3);
+    } catch (e) {
+        showToast(e.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Submit Wagers →';
+    }
+});
+
+function toggleFJChoice(btn, choice) {
+    const row = btn.closest('.fj-resolve-row');
+    row.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    row.dataset.choice = choice;
+}
+
+$('#btn-fj-reveal')?.addEventListener('click', () => {
+    $('#fj-display-answer').classList.add('revealed');
+});
+
+$('#btn-fj-finish')?.addEventListener('click', async () => {
+    const correct = [];
+    const wrong = [];
+    let allGuessed = true;
+    $$('.fj-resolve-row').forEach(row => {
+        const c = row.dataset.choice;
+        if (c === 'correct') correct.push(row.dataset.pid);
+        else if (c === 'wrong') wrong.push(row.dataset.pid);
+        else allGuessed = false;
+    });
+    
+    if (!allGuessed) {
+        if (!confirm('Not all players have been marked correct/wrong. Continue anyway? Unmarked players will score 0 for this round.')) return;
+    }
+    
+    const btn = $('#btn-fj-finish');
+    btn.disabled = true;
+    btn.textContent = 'Resolving...';
+    try {
+        const updatedGame = await API.finalJeopardyResolve(State.currentGameId, correct, wrong);
+        State.game = updatedGame;
+        closeFJModal();
+        showToast('Final Jeopardy complete!', 'success');
+        setTimeout(() => {
+            showView('complete');
+            renderCompleteView(updatedGame);
+        }, 800);
+    } catch (e) {
+        showToast(e.message, 'error');
+        btn.disabled = false;
+        btn.textContent = 'End Game';
+    }
+});
+
 // ─── COMPLETE VIEW ────────────────────────────────────────────
 function renderCompleteView(game) {
     const sorted = [...game.players].sort((a, b) => b.score - a.score);
@@ -1143,7 +1351,8 @@ function renderCompleteView(game) {
     const rankEmojis = ['🥇', '🥈', '🥉'];
     const rankClasses = ['rank-1', 'rank-2', 'rank-3'];
 
-    $('#final-scores').innerHTML = sorted.map((p, i) => `
+    // Render podium
+    $('#final-scores').innerHTML = sorted.slice(0, 3).map((p, i) => `
     <div class="final-score-card ${i === 0 ? 'first' : ''} slide-up">
       <div class="final-rank ${rankClasses[i] || ''}">
         ${rankEmojis[i] || `#${i + 1}`}
@@ -1152,6 +1361,28 @@ function renderCompleteView(game) {
       <div class="final-score-value">$${p.score.toLocaleString()}</div>
     </div>
   `).join('');
+
+    // Render stats table
+    const statsContainer = $('#complete-stats-container');
+    if (statsContainer) {
+        let rows = '';
+        sorted.forEach((p, i) => {
+            const st = (game.stats && game.stats[p.id]) || { answered: 0, attempted: 0, totalEarned: 0 };
+            const accuracy = st.attempted > 0 ? Math.round((st.answered / st.attempted) * 100) : 0;
+            const ptsEarned = st.totalEarned || 0;
+            rows += `
+                <tr>
+                    <td>${i + 1}</td>
+                    <td><strong>${escHtml(p.name)}</strong></td>
+                    <td style="color:var(--gold); font-weight:bold">$${p.score.toLocaleString()}</td>
+                    <td>${st.answered}</td>
+                    <td>${accuracy}%</td>
+                    <td style="color:var(--success)">+$${ptsEarned.toLocaleString()}</td>
+                </tr>
+            `;
+        });
+        $('#complete-stats-tbody').innerHTML = rows;
+    }
 }
 
 $('#btn-play-again').addEventListener('click', async () => {
@@ -1180,23 +1411,16 @@ function handleCredentialResponse(response) {
     if (response.credential) {
         localStorage.setItem('admin_token', response.credential);
         const payload = JSON.parse(atob(response.credential.split('.')[1]));
-        
-        $('#google-signin-container').style.display = 'none';
-        $('#btn-new-game').style.display = 'inline-flex';
-        
         $('#admin-user-info').style.display = 'flex';
         $('#admin-email-display').textContent = payload.email;
-        
         showToast('Logged in as Admin: ' + payload.email, 'success');
-        loadHomeView(); // Refresh to show New Game button in empty state
+        loadHomeView();
     }
 }
 
 $('#btn-admin-logout').addEventListener('click', () => {
     localStorage.removeItem('admin_token');
     $('#admin-user-info').style.display = 'none';
-    $('#google-signin-container').style.display = 'flex';
-    $('#btn-new-game').style.display = 'none';
     showToast('Signed out', 'info');
     goHome();
 });
@@ -1209,8 +1433,6 @@ function restoreSession() {
         try {
             const payload = JSON.parse(atob(token.split('.')[1]));
             if (payload.exp * 1000 > Date.now()) {
-                $('#google-signin-container').style.display = 'none';
-                $('#btn-new-game').style.display = 'inline-flex';
                 $('#admin-user-info').style.display = 'flex';
                 $('#admin-email-display').textContent = payload.email;
             } else {
@@ -1226,15 +1448,35 @@ function restoreSession() {
 (async function init() {
     try {
         const config = await API.getConfig();
-        if (config.googleClientId && window.google) {
-            google.accounts.id.initialize({
-                client_id: config.googleClientId,
-                callback: handleCredentialResponse
-            });
-            google.accounts.id.renderButton(
-                $('#google-signin-btn'),
-                { theme: "outline", size: "large", type: "standard" }
-            );
+        if (config.googleClientId) {
+            let attempts = 0;
+            const initGoogle = () => {
+                if (window.google) {
+                    google.accounts.id.initialize({
+                        client_id: config.googleClientId,
+                        callback: handleCredentialResponse
+                    });
+                    google.accounts.id.renderButton(
+                        $('#google-signin-btn'),
+                        { theme: "outline", size: "large", type: "standard" }
+                    );
+                    
+                    // Fallback
+                    setTimeout(() => {
+                        const btnContainer = $('#google-signin-btn');
+                        if (btnContainer && !btnContainer.querySelector('iframe')) {
+                            btnContainer.innerHTML = `<button id="google-signin-fallback" class="btn btn-gold" style="font-size:0.9rem; padding:0.6rem 1.4rem; white-space:nowrap;">🔑 Sign in with Google</button>`;
+                            $('#google-signin-fallback').addEventListener('click', () => {
+                                try { google.accounts.id.prompt(); } catch(e) { showToast('Google Sign-In unavailable', 'warning'); }
+                            });
+                        }
+                    }, 2000);
+                } else if (attempts < 50) {
+                    attempts++;
+                    setTimeout(initGoogle, 100);
+                }
+            };
+            initGoogle();
         }
     } catch (e) {
         console.error('Failed to load Google Client config', e);

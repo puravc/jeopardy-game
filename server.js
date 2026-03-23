@@ -5,8 +5,6 @@ const cors = require('cors');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const { MongoClient } = require('mongodb');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
-const OpenAI = require('openai');
 const Anthropic = require('@anthropic-ai/sdk');
 const { OAuth2Client } = require('google-auth-library');
 const { WebSocketServer } = require('ws');
@@ -59,7 +57,7 @@ function getAI() {
 // =====================
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
-async function requireAdmin(req, res, next) {
+const requireAdmin = async (req, res, next) => {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
         return res.status(401).json({ error: 'Unauthorized: No token provided' });
@@ -82,15 +80,16 @@ async function requireAdmin(req, res, next) {
     } catch (err) {
         return res.status(401).json({ error: 'Unauthorized: Invalid token' });
     }
-}
+};
 
 // =====================
 // API Routes
 // =====================
 
-// All /api/games routes require admin authentication
+// Apply auth to all /api/games routes
 app.use('/api/games', requireAdmin);
 
+// Admin-only routes
 // GET /api/config — Return API key status
 app.get('/api/config', (req, res) => {
     res.json({ hasApiKey: !!getAI(), googleClientId: process.env.GOOGLE_CLIENT_ID });
@@ -310,7 +309,6 @@ Return ONLY a valid JSON array:
             { $set: { 'categories.$.questions': questions, updatedAt: new Date().toISOString() } }
         );
 
-        res.json({ questions });
     } catch (err) {
         console.error('Claude error:', err.message);
         res.status(500).json({ error: 'Failed to generate questions: ' + err.message });
@@ -408,10 +406,17 @@ app.post('/api/games/:id/award', async (req, res) => {
 
         const allAnswered = updatedCategories.every(c => c.questions.every(qu => qu.answered));
         const newStatus = allAnswered ? 'completed' : game.status;
+        
+        // Update stats
+        const stats = game.stats || {};
+        if (!stats[playerId]) stats[playerId] = { answered: 0, attempted: 0, totalEarned: 0 };
+        stats[playerId].attempted += 1;
+        stats[playerId].answered += 1;
+        stats[playerId].totalEarned += q.value;
 
         const updated = await gamesCol().findOneAndUpdate(
             { id: req.params.id },
-            { $set: { categories: updatedCategories, players: updatedPlayers, status: newStatus, updatedAt: new Date().toISOString() } },
+            { $set: { categories: updatedCategories, players: updatedPlayers, status: newStatus, stats: stats, updatedAt: new Date().toISOString() } },
             { returnDocument: 'after', projection: { _id: 0 } }
         );
 
@@ -460,10 +465,16 @@ app.post('/api/games/:id/deduct', async (req, res) => {
         const updatedPlayers = game.players.map(p =>
             p.id === playerId ? { ...p, score: p.score - q.value } : p
         );
+        
+        // Update stats 
+        const stats = game.stats || {};
+        if (!stats[playerId]) stats[playerId] = { answered: 0, attempted: 0, totalEarned: 0 };
+        stats[playerId].attempted += 1;
+        stats[playerId].totalEarned -= q.value;
 
         const updated = await gamesCol().findOneAndUpdate(
             { id: req.params.id },
-            { $set: { categories: updatedCategories, players: updatedPlayers, status: newStatus, updatedAt: new Date().toISOString() } },
+            { $set: { categories: updatedCategories, players: updatedPlayers, status: newStatus, stats: stats, updatedAt: new Date().toISOString() } },
             { returnDocument: 'after', projection: { _id: 0 } }
         );
 
@@ -509,6 +520,134 @@ app.post('/api/games/:id/skip', async (req, res) => {
                 type: 'score_update',
                 players: game.players // Scores don't change on skip, but keeps state in sync
             });
+        }
+
+        res.json(updated);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// POST /api/games/:id/clone — Clone a game
+app.post('/api/games/:id/clone', async (req, res) => {
+    try {
+        const game = await gamesCol().findOne({ id: req.params.id }, { projection: { _id: 0 } });
+        if (!game) return res.status(404).json({ error: 'Game not found' });
+        
+        const newName = req.body.name || `${game.name} (Copy)`;
+        const newId = uuidv4();
+        
+        // Deep copy categories, resetting answered state
+        const clonedCategories = game.categories.map(c => ({
+            ...c,
+            id: uuidv4(),
+            questions: c.questions.map(q => ({
+                ...q,
+                id: uuidv4(),
+                answered: false,
+                answeredBy: null,
+                wrongAnswers: []
+            }))
+        }));
+
+        const newGame = {
+            id: newId,
+            name: newName,
+            status: 'configuring',
+            playerMode: game.playerMode,
+            joinCode: game.playerMode === 'self_register' ? generateJoinCode() : null,
+            players: [],
+            categories: clonedCategories,
+            createdBy: req.user.email,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            stats: {}
+        };
+
+        await gamesCol().insertOne(newGame);
+        res.status(201).json(newGame);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// POST /api/games/:id/final-jeopardy — Setup final jeopardy
+app.post('/api/games/:id/final-jeopardy', async (req, res) => {
+    const { question, answer, wagers } = req.body;
+    if (!question || !answer || !wagers) return res.status(400).json({ error: 'Missing req details' });
+    try {
+        const updated = await gamesCol().findOneAndUpdate(
+            { id: req.params.id },
+            { 
+                $set: { 
+                    finalJeopardy: { active: true, question, answer, wagers },
+                    updatedAt: new Date().toISOString()
+                }
+            },
+            { returnDocument: 'after', projection: { _id: 0 } }
+        );
+        res.json(updated);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// POST /api/games/:id/final-jeopardy/resolve — Resolve final jeopardy
+app.post('/api/games/:id/final-jeopardy/resolve', async (req, res) => {
+    const { correct, wrong } = req.body; // Arrays of player IDs
+    try {
+        const game = await gamesCol().findOne({ id: req.params.id }, { projection: { _id: 0 } });
+        if (!game || !game.finalJeopardy) return res.status(404).json({ error: 'Game/FJ not found' });
+
+        const wagers = game.finalJeopardy.wagers;
+        const updatedPlayers = game.players.map(p => {
+            const wager = wagers[p.id] || 0;
+            if (correct.includes(p.id)) return { ...p, score: p.score + wager };
+            if (wrong.includes(p.id)) return { ...p, score: Math.max(0, p.score - wager) };
+            return p;
+        });
+        
+        // Calculate point diff for stats
+        const stats = game.stats || {};
+        updatedPlayers.forEach(p => {
+            if (!stats[p.id]) stats[p.id] = { answered: 0, attempted: 0, totalEarned: 0 };
+            const oldScore = game.players.find(oldP => oldP.id === p.id)?.score || 0;
+            const diff = p.score - oldScore;
+            
+            // Mark attempt
+            if (correct.includes(p.id) || wrong.includes(p.id)) {
+                stats[p.id].attempted += 1;
+            }
+            if (correct.includes(p.id)) {
+                stats[p.id].answered += 1;
+                stats[p.id].totalEarned += diff;
+            } else if (wrong.includes(p.id) && diff < 0) {
+                stats[p.id].totalEarned += diff; // it's negative, so subtracting
+            }
+        });
+
+        const updated = await gamesCol().findOneAndUpdate(
+            { id: req.params.id },
+            { 
+                $set: { 
+                    players: updatedPlayers,
+                    status: 'completed',
+                    'finalJeopardy.active': false,
+                    'finalJeopardy.complete': true,
+                    stats: stats,
+                    updatedAt: new Date().toISOString()
+                }
+            },
+            { returnDocument: 'after', projection: { _id: 0 } }
+        );
+
+        const room = rooms.get(req.params.id);
+        if (room) {
+            broadcast(room, {
+                type: 'score_update',
+                players: updatedPlayers
+            });
+            broadcast(room, { type: 'game_status_update', status: 'completed' });
         }
 
         res.json(updated);
@@ -633,7 +772,8 @@ wss.on('connection', (ws) => {
             if (!room) return;
             room.buzzerQueue = [];
             room.questionOpen = true;
-            broadcast(room, { type: 'question_open' });
+            room.timeoutAt = Date.now() + 15000;
+            broadcast(room, { type: 'question_open', timeoutAt: room.timeoutAt });
         }
 
         else if (type === 'close_question') {
