@@ -23,7 +23,13 @@ const PORT = process.env.PORT || 3000;
 // Middleware
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'client', 'dist')));
+
+// Simple request logger
+app.use((req, res, next) => {
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+    next();
+});
 
 // =====================
 // MongoDB Setup
@@ -147,6 +153,20 @@ app.post('/api/games', async (req, res) => {
 app.get('/api/games/:id', async (req, res) => {
     try {
         const game = await gamesCol().findOne({ id: req.params.id }, { projection: { _id: 0 } });
+        if (!game) return res.status(404).json({ error: 'Game not found' });
+        res.json(game);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// GET /api/public/games/:id — Public game snapshot for players
+app.get('/api/public/games/:id', async (req, res) => {
+    try {
+        const game = await gamesCol().findOne(
+            { id: req.params.id },
+            { projection: { _id: 0, id: 1, name: 1, status: 1, playerMode: 1, players: 1, joinCode: 1, categories: 1, stats: 1, finalJeopardy: 1 } }
+        );
         if (!game) return res.status(404).json({ error: 'Game not found' });
         res.json(game);
     } catch (e) {
@@ -281,33 +301,41 @@ app.post('/api/games/:id/generate-questions', async (req, res) => {
 
         const message = await openai.messages.create({
             model: 'claude-haiku-4-5',
-            max_tokens: 2048,
+            max_tokens: 700,
             messages: [{
                 role: 'user',
                 content: `You are a Jeopardy game question writer. Return ONLY valid JSON arrays with no markdown, no extra text.
 
-Generate exactly 10 Jeopardy-style questions for the category "${category.name}".
+Generate exactly 5 Jeopardy-style questions for the category "${category.name}".
 Difficulty Level: ${difficulty.toUpperCase()}
 ${hint ? `\nAdditional instructions from the host: ${hint}\n` : ''}
-Point values (in order): 200, 400, 600, 800, 1000, 200, 400, 600, 800, 1000
+Point values (in order): 200, 400, 600, 800, 1000
 The "question" is a clue/statement; the "answer" is what the contestant says.
 
 Return ONLY a valid JSON array:
-[{"value": 200, "question": "clue", "answer": "answer"}, ... 10 total]`
+[{"value": 200, "question": "clue", "answer": "answer"}, ... 5 total]`
             }],
         });
 
         let jsonText = message.content[0].text.trim();
         if (jsonText.startsWith('```')) jsonText = jsonText.replace(/^```[a-z]*\n?/, '').replace(/```$/, '').trim();
 
-        const questions = JSON.parse(jsonText).map(q => ({
+        let parsed = JSON.parse(jsonText).map(q => ({
             id: uuidv4(), value: q.value, question: q.question, answer: q.answer, answered: false, answeredBy: null,
         }));
+
+        // Ensure we only store up to 5 questions even if AI returns more
+        const questions = parsed.slice(0, 5);
 
         await gamesCol().updateOne(
             { id: req.params.id, 'categories.id': categoryId },
             { $set: { 'categories.$.questions': questions, updatedAt: new Date().toISOString() } }
         );
+
+        // Return the updated category back to the client
+        const updatedGame = await gamesCol().findOne({ id: req.params.id }, { projection: { _id: 0 } });
+        const updatedCategory = updatedGame.categories.find(c => c.id === categoryId);
+        return res.json(updatedCategory);
 
     } catch (err) {
         console.error('Claude error:', err.message);
@@ -330,6 +358,11 @@ app.post('/api/games/:id/start', async (req, res) => {
             { $set: { status: 'active', updatedAt: new Date().toISOString() } },
             { returnDocument: 'after', projection: { _id: 0 } }
         );
+        const room = rooms.get(req.params.id);
+        if (room) {
+            broadcast(room, { type: 'game_status_update', status: updated.status });
+            broadcast(room, { type: 'game_update', game: updated });
+        }
         res.json(updated);
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -371,10 +404,9 @@ app.post('/api/games/:id/reset', async (req, res) => {
 
         const room = rooms.get(req.params.id);
         if (room) {
-            broadcast(room, {
-                type: 'score_update',
-                players: resetPlayers
-            });
+            broadcast(room, { type: 'score_update', players: resetPlayers });
+            broadcast(room, { type: 'game_status_update', status: 'configuring' });
+            broadcast(room, { type: 'game_update', game: updated });
         }
 
         res.json(updated);
@@ -395,13 +427,16 @@ app.post('/api/games/:id/award', async (req, res) => {
         const q = cat.questions.find(q => q.id === questionId);
         if (!q) return res.status(404).json({ error: 'Question not found' });
 
-        // Award points and mark answered
+        // Award points and mark answered. We allow overrides (re-awarding) if the host needs to fix a mistake.
         const updatedCategories = game.categories.map(c => ({
             ...c,
             questions: c.questions.map(qu => qu.id === questionId ? { ...qu, answered: true, answeredBy: playerId } : qu),
         }));
+        
+        // Always award points if the host clicks 'Right'. 
+        // Note: If they award it twice to the same person, they get double points. That's a host choice.
         const updatedPlayers = game.players.map(p =>
-            p.id === playerId && !q.answered ? { ...p, score: p.score + q.value } : p
+            p.id === playerId ? { ...p, score: p.score + q.value } : p
         );
 
         const allAnswered = updatedCategories.every(c => c.questions.every(qu => qu.answered));
@@ -427,6 +462,10 @@ app.post('/api/games/:id/award', async (req, res) => {
                 players: updatedPlayers,
                 event: { type: 'award', playerId, amount: q.value }
             });
+            broadcast(room, { type: 'game_update', game: updated });
+            if (newStatus === 'completed') {
+                broadcast(room, { type: 'game_status_update', status: 'completed' });
+            }
         }
 
         res.json(updated);
@@ -437,6 +476,7 @@ app.post('/api/games/:id/award', async (req, res) => {
 // POST /api/games/:id/deduct — Deduct points for wrong answer
 app.post('/api/games/:id/deduct', async (req, res) => {
     const { questionId, playerId, categoryId } = req.body;
+    console.log(`POST /api/games/${req.params.id}/deduct`, { questionId, playerId, categoryId });
     try {
         const game = await gamesCol().findOne({ id: req.params.id }, { projection: { _id: 0 } });
         if (!game) return res.status(404).json({ error: 'Game not found' });
@@ -446,21 +486,20 @@ app.post('/api/games/:id/deduct', async (req, res) => {
         const q = cat.questions.find(q => q.id === questionId);
         if (!q) return res.status(404).json({ error: 'Question not found' });
 
-        if (q.answered) return res.status(400).json({ error: 'Question already answered correctly' });
+        // We allow the host to deduct even if already guessed wrong (override).
+        // if (q.answered) return res.status(400).json({ error: 'Question already answered correctly' });
 
-        let wrongAnswers = q.wrongAnswers || [];
-        if (wrongAnswers.includes(playerId)) {
-            return res.status(400).json({ error: 'Player already guessed incorrectly' });
-        }
-
-        // Deduct points and mark the question as fully answered (ending it)
+        // Deduct points. IMPORTANT: in Jeopardy, a wrong answer does NOT close the question.
         const updatedCategories = game.categories.map(c => ({
             ...c,
-            questions: c.questions.map(qu => qu.id === questionId ? { ...qu, answered: true, wrongAnswers: [...(qu.wrongAnswers || []), playerId] } : qu),
+            questions: c.questions.map(qu => qu.id === questionId ? { 
+                ...qu, 
+                answered: false, 
+                wrongAnswers: qu.wrongAnswers?.includes(playerId) ? qu.wrongAnswers : [...(qu.wrongAnswers || []), playerId] 
+            } : qu),
         }));
 
-        const allAnswered = updatedCategories.every(c => c.questions.every(qu => qu.answered));
-        const newStatus = allAnswered ? 'completed' : game.status;
+        const newStatus = game.status;
 
         const updatedPlayers = game.players.map(p =>
             p.id === playerId ? { ...p, score: p.score - q.value } : p
@@ -480,11 +519,18 @@ app.post('/api/games/:id/deduct', async (req, res) => {
 
         const room = rooms.get(req.params.id);
         if (room) {
+            // Remove the player who just guessed wrong from the buzzer queue
+            room.buzzerQueue = room.buzzerQueue.filter(b => b.playerId !== playerId);
+            
             broadcast(room, {
                 type: 'score_update',
                 players: updatedPlayers,
                 event: { type: 'deduct', playerId, amount: -q.value }
             });
+            broadcast(room, { type: 'game_update', game: updated });
+            
+            // Sync the updated buzzer queue
+            broadcast(room, { type: 'buzzer_update', queue: room.buzzerQueue });
         }
 
         res.json(updated);
@@ -520,7 +566,35 @@ app.post('/api/games/:id/skip', async (req, res) => {
                 type: 'score_update',
                 players: game.players // Scores don't change on skip, but keeps state in sync
             });
+            broadcast(room, { type: 'game_update', game: updated });
+            if (newStatus === 'completed') {
+                broadcast(room, { type: 'game_status_update', status: 'completed' });
+            }
         }
+
+        res.json(updated);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// POST /api/games/:id/reset-question — Reset wrong guesses for a question
+app.post('/api/games/:id/reset-question', async (req, res) => {
+    const { questionId, categoryId } = req.body;
+    try {
+        const game = await gamesCol().findOne({ id: req.params.id }, { projection: { _id: 0 } });
+        if (!game) return res.status(404).json({ error: 'Game not found' });
+
+        const updatedCategories = game.categories.map(c => ({
+            ...c,
+            questions: c.questions.map(q => q.id === questionId ? { ...q, wrongAnswers: [] } : q),
+        }));
+
+        const updated = await gamesCol().findOneAndUpdate(
+            { id: req.params.id },
+            { $set: { categories: updatedCategories, updatedAt: new Date().toISOString() } },
+            { returnDocument: 'after', projection: { _id: 0 } }
+        );
 
         res.json(updated);
     } catch (e) {
@@ -647,6 +721,7 @@ app.post('/api/games/:id/final-jeopardy/resolve', async (req, res) => {
                 type: 'score_update',
                 players: updatedPlayers
             });
+            broadcast(room, { type: 'game_update', game: updated });
             broadcast(room, { type: 'game_status_update', status: 'completed' });
         }
 
@@ -664,7 +739,16 @@ app.get('/api/join/:code', async (req, res) => {
             { projection: { _id: 0, id: 1, name: 1, joinCode: 1, players: 1, status: 1 } }
         );
         if (!game) return res.status(404).json({ error: 'Game not found. Check your code.' });
+
+        // Allow existing players to re-lookup the game after it starts
+        const existingPlayerName = req.query.playerName;
         if (game.status !== 'configuring') {
+            if (existingPlayerName) {
+                const isExisting = game.players?.some(p => p.name.toLowerCase() === existingPlayerName.trim().toLowerCase());
+                if (isExisting) {
+                    return res.json(game);
+                }
+            }
             return res.status(403).json({ error: 'This game has already started. No new players can join.' });
         }
         res.json(game);
@@ -673,10 +757,6 @@ app.get('/api/join/:code', async (req, res) => {
     }
 });
 
-// Catch-all → serve SPA
-app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
 
 // =====================
 // WebSocket Buzzer Server
@@ -730,31 +810,49 @@ wss.on('connection', (ws) => {
         }
 
         else if (type === 'player_join') {
+            if (!playerName || !playerName.trim()) {
+                ws.send(JSON.stringify({ type: 'error', message: 'Player name is required.' }));
+                return;
+            }
+
             // Look up game and enforce join-lock after game starts
             const game = await db.collection('games').findOne({ id: gameId }, { projection: { status: 1, playerMode: 1, players: 1 } });
             if (!game) {
                 ws.send(JSON.stringify({ type: 'error', message: 'Game not found.' }));
                 return;
             }
-            if (game.status !== 'configuring') {
+
+            // Allow existing players to reconnect regardless of game status
+            const existingRosterPlayer = game.players?.find(p => p.name.toLowerCase() === playerName.trim().toLowerCase());
+            if (game.status !== 'configuring' && !existingRosterPlayer) {
                 ws.send(JSON.stringify({ type: 'error', message: 'This game has already started. You can no longer join.' }));
                 return;
             }
 
             assignedGameId = gameId;
-            assignedPlayerId = uuidv4();
-            const newPlayer = { id: assignedPlayerId, name: playerName, score: 0 };
 
-            // Persist player to MongoDB
-            await db.collection('games').updateOne(
-                { id: gameId },
-                { $push: { players: newPlayer }, $set: { updatedAt: new Date().toISOString() } }
-            );
+            // Check if player with this name already exists (re-join)
+            const existingPlayer = game.players?.find(p => p.name.toLowerCase() === playerName.trim().toLowerCase());
+            
+            if (existingPlayer) {
+                assignedPlayerId = existingPlayer.id;
+                console.log(`Player re-join: ${playerName.trim()} (${assignedPlayerId})`);
+            } else {
+                assignedPlayerId = uuidv4();
+                const newPlayer = { id: assignedPlayerId, name: playerName.trim(), score: 0 };
+                // Persist player to MongoDB
+                await db.collection('games').updateOne(
+                    { id: gameId },
+                    { $push: { players: newPlayer }, $set: { updatedAt: new Date().toISOString() } }
+                );
+                console.log(`New player joined: ${playerName.trim()} (${assignedPlayerId})`);
+            }
 
             const room = getOrCreateRoom(gameId);
-            room.players.set(assignedPlayerId, { ws, name: playerName, id: assignedPlayerId });
+            room.players.set(assignedPlayerId, { ws, name: playerName.trim(), id: assignedPlayerId });
             ws.send(JSON.stringify({ type: 'player_joined', playerId: assignedPlayerId, gameId,
-                questionOpen: room.questionOpen }));
+                questionOpen: room.questionOpen,
+                timeoutAt: room.timeoutAt || null }));
 
             // Refresh full player list from DB and broadcast
             const updatedGame = await db.collection('games').findOne({ id: gameId }, { projection: { players: 1 } });
@@ -786,9 +884,15 @@ wss.on('connection', (ws) => {
         else if (type === 'buzz') {
             const room = rooms.get(gameId);
             if (!room || !room.questionOpen) return;
-            // prevent double-buzz from same player
-            if (room.buzzerQueue.some(b => b.playerId === playerId)) return;
-            room.buzzerQueue.push({ playerId, name: playerName, time: Date.now() });
+            const buzzerIdentifier = playerId || playerName?.trim().toLowerCase();
+            if (!buzzerIdentifier) return;
+
+            // prevent double-buzz from the same player, even if a join id is not ready yet
+            if (room.buzzerQueue.some(b => (b.playerId || b.name?.trim().toLowerCase()) === buzzerIdentifier)) return;
+            const resolvedName = playerName || room.players.get(playerId)?.name || 'Unknown player';
+            const buzzEntry = { playerId, name: resolvedName, time: Date.now() };
+            room.buzzerQueue.push(buzzEntry);
+            broadcast(room, { type: 'buzz', buzz: buzzEntry, queue: room.buzzerQueue });
             broadcast(room, { type: 'buzzer_update', queue: room.buzzerQueue });
         }
     });
@@ -818,6 +922,11 @@ wss.on('connection', (ws) => {
             await broadcastPlayerList(assignedGameId);
         }
     });
+});
+
+// Serve React index.html for all other routes (Client-side routing)
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'client', 'dist', 'index.html'));
 });
 
 connectDB().then(() => {
