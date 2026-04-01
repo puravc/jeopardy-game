@@ -1,18 +1,21 @@
 import React, { useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { API } from '../utils/api';
 
 export default function LandingPage() {
     const { login } = useAuth();
     const btnRef = useRef(null);
 
     useEffect(() => {
-        // We reuse the polling logic to ensure google is loaded
+        let cancelled = false;
         let attempts = 0;
-        const initGoogle = () => {
+
+        const initGoogle = (clientId) => {
+            if (cancelled) return;
             if (window.google && btnRef.current) {
                 window.google.accounts.id.initialize({
-                    client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID, 
+                    client_id: clientId,
                     callback: (response) => {
                         if (response.credential) {
                             login(response.credential);
@@ -25,10 +28,25 @@ export default function LandingPage() {
                 );
             } else if (attempts < 50) {
                 attempts++;
-                setTimeout(initGoogle, 100);
+                setTimeout(() => initGoogle(clientId), 100);
             }
         };
-        initGoogle();
+
+        API.getConfig()
+            .then(config => {
+                if (!cancelled) initGoogle(config.googleClientId);
+            })
+            .catch((err) => {
+                console.error('Failed to fetch config for Google Sign-In:', err);
+                const fallbackId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+                if (!cancelled && fallbackId) {
+                    initGoogle(fallbackId);
+                } else if (!cancelled) {
+                    console.error('Google client_id is not configured. Set GOOGLE_CLIENT_ID on the server.');
+                }
+            });
+
+        return () => { cancelled = true; };
     }, [login]);
 
     return (
