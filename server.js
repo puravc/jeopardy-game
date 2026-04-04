@@ -300,7 +300,7 @@ app.post('/api/games/:id/generate-questions', async (req, res) => {
         if (!category) return res.status(404).json({ error: 'Category not found' });
 
         const message = await openai.messages.create({
-            model: 'claude-haiku-4-5',
+            model: 'claude-sonnet-4-6',
             max_tokens: 700,
             messages: [{
                 role: 'user',
