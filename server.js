@@ -311,7 +311,7 @@ Difficulty Level: ${difficulty.toUpperCase()}
 ${hint ? `\nAdditional instructions from the host: ${hint}\n` : ''}
 Point values (in order): 200, 400, 600, 800, 1000
 The "question" is a clue/statement; the "answer" is what the contestant says.
-
+generate questions based on difficulty level.
 Return ONLY a valid JSON array:
 [{"value": 200, "question": "clue", "answer": "answer"}, ... 5 total]`
             }],
