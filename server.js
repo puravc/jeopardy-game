@@ -51,15 +51,20 @@ const configuredOrigins = (process.env.ALLOWED_ORIGINS || '')
     .filter(Boolean);
 const allowedOrigins = configuredOrigins.length ? configuredOrigins : defaultAllowedOrigins;
 
-const corsOptions = {
-    origin(origin, callback) {
-        // Allow non-browser requests and same-origin requests with no Origin header.
-        if (!origin) return callback(null, true);
-        if (allowedOrigins.includes(origin)) return callback(null, true);
-        return callback(new Error('Not allowed by CORS'));
-    },
-    credentials: true,
-};
+function isSameOrigin(origin, req) {
+    try {
+        const originUrl = new URL(origin);
+        const forwardedHost = req.get('x-forwarded-host');
+        const host = (forwardedHost || req.get('host') || '').split(',')[0].trim();
+        const forwardedProto = req.get('x-forwarded-proto');
+        const protocol = ((forwardedProto || req.protocol || 'http').split(',')[0].trim()).replace(/:$/, '');
+        return originUrl.host === host && originUrl.protocol === `${protocol}:`;
+    } catch {
+        return false;
+    }
+}
+
+const corsOptions = { credentials: true };
 
 const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -79,7 +84,18 @@ const joinLimiter = rateLimit({
 
 // Middleware
 app.set('trust proxy', 1);
-app.use(cors(corsOptions));
+app.use((req, res, next) => {
+    cors({
+        ...corsOptions,
+        origin(origin, callback) {
+            // Allow non-browser requests and same-origin requests.
+            if (!origin) return callback(null, true);
+            if (allowedOrigins.includes(origin)) return callback(null, true);
+            if (isSameOrigin(origin, req)) return callback(null, true);
+            return callback(new Error('Not allowed by CORS'));
+        },
+    })(req, res, next);
+});
 app.use(helmet({
     contentSecurityPolicy: false,
     // Google Sign-In popup requires opener relationship to remain available.
