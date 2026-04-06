@@ -39,12 +39,28 @@ export const API = {
 
     // categories
     addCategory: (gid, name) => API.post(`/games/${gid}/categories`, { name }),
+    renameCategory: (gid, cid, name) => API.put(`/games/${gid}/categories/${cid}`, { name }),
     removeCategory: (gid, cid) => API.del(`/games/${gid}/categories/${cid}`),
     updateQuestions: (gid, cid, questions) => API.put(`/games/${gid}/categories/${cid}/questions`, { questions }),
+    importQuestionsToCategory: (gid, cid, questionIds) => API.post(`/games/${gid}/categories/${cid}/import-questions`, { questionIds }),
+    importBestMatchesToCategory: (gid, cid, limit = 5) => API.post(`/games/${gid}/categories/${cid}/import-best-matches`, { limit }),
 
     // AI
     generateQuestions: (gid, categoryId, hint, difficulty) => API.post(`/games/${gid}/generate-questions`, { categoryId, hint, difficulty }),
     getConfig: () => API.get('/config'),
+
+    // Question bank
+    listQuestionBank: ({ category = '', search = '', limit = 100, skip = 0 } = {}) => {
+        const params = new URLSearchParams();
+        if (category) params.set('category', category);
+        if (search) params.set('search', search);
+        params.set('limit', String(limit));
+        params.set('skip', String(skip));
+        return API.get(`/questionbank?${params.toString()}`);
+    },
+    createQuestionBankQuestion: (categoryName, question, answer, value) => API.post('/questionbank', { categoryName, question, answer, value }),
+    deleteQuestionBankQuestion: (questionId) => API.del(`/questionbank/${questionId}`),
+    backfillQuestionBank: () => API.post('/questionbank/backfill'),
 
     // Gameplay
     startGame: (id) => API.post(`/games/${id}/start`),

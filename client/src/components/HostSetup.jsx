@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { API } from '../utils/api';
 
 export default function HostSetup({ game, setGame, loadGame, sendSocketMessage }) {
@@ -8,10 +9,15 @@ export default function HostSetup({ game, setGame, loadGame, sendSocketMessage }
     const [playerName, setPlayerName] = useState('');
     const [categoryName, setCategoryName] = useState('');
     const [generatingCatId, setGeneratingCatId] = useState(null);
+    const [importingBestCatId, setImportingBestCatId] = useState(null);
+    const [editingCategoryId, setEditingCategoryId] = useState(null);
+    const [editingCategoryName, setEditingCategoryName] = useState('');
+    const [renamingCategoryId, setRenamingCategoryId] = useState(null);
     const [manualCategoryId, setManualCategoryId] = useState(null);
     const [manualQuestions, setManualQuestions] = useState([]);
     const [manualSaving, setManualSaving] = useState(false);
     const [manualError, setManualError] = useState('');
+    const navigate = useNavigate();
     const joinUrl = `${window.location.origin}/join`;
 
     const qCount = game.categories.reduce((acc, cat) => acc + (cat.questions?.length || 0), 0);
@@ -58,6 +64,45 @@ export default function HostSetup({ game, setGame, loadGame, sendSocketMessage }
         }
     };
 
+    const startRenameCategory = (cid, currentName) => {
+        setEditingCategoryId(cid);
+        setEditingCategoryName(currentName);
+    };
+
+    const cancelRenameCategory = () => {
+        if (renamingCategoryId) return;
+        setEditingCategoryId(null);
+        setEditingCategoryName('');
+    };
+
+    const saveRenameCategory = async (cid, currentName) => {
+        const trimmedName = editingCategoryName.trim();
+        if (!trimmedName) return alert('Topic name cannot be empty');
+        if (trimmedName === currentName) {
+            cancelRenameCategory();
+            return;
+        }
+
+        try {
+            setRenamingCategoryId(cid);
+            const updatedCategory = await API.renameCategory(game.id, cid, trimmedName);
+            if (updatedCategory && setGame) {
+                setGame(prev => ({
+                    ...prev,
+                    categories: prev.categories.map(c => c.id === cid ? updatedCategory : c),
+                }));
+            } else {
+                await loadGame();
+            }
+            setEditingCategoryId(null);
+            setEditingCategoryName('');
+        } catch (e) {
+            alert(e.message);
+        } finally {
+            setRenamingCategoryId(null);
+        }
+    };
+
     const removeCategory = async (cid) => {
         if (!window.confirm('Remove this topic and all questions?')) return;
         try {
@@ -90,6 +135,26 @@ export default function HostSetup({ game, setGame, loadGame, sendSocketMessage }
             alert('Generation failed: ' + e.message);
         } finally {
             setGeneratingCatId(null);
+        }
+    };
+
+    const importBestMatches = async (cid) => {
+        setImportingBestCatId(cid);
+        try {
+            const payload = await API.importBestMatchesToCategory(game.id, cid, 5);
+            if (payload?.category && setGame) {
+                setGame(prev => ({
+                    ...prev,
+                    categories: prev.categories.map(c => c.id === cid ? payload.category : c),
+                }));
+            } else {
+                await loadGame();
+            }
+            alert(`Imported ${payload?.importedCount || 0} best-match question(s).`);
+        } catch (e) {
+            alert('Import failed: ' + e.message);
+        } finally {
+            setImportingBestCatId(null);
         }
     };
 
@@ -266,7 +331,15 @@ export default function HostSetup({ game, setGame, loadGame, sendSocketMessage }
 
                 {activeTab === 'topics' && (
                     <section className="admin-section active">
-                        <div className="admin-section-header"><h2 className="admin-section-title">TOPICS & QUESTIONS</h2></div>
+                        <div className="admin-section-header" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                            <h2 className="admin-section-title">TOPICS & QUESTIONS</h2>
+                            <button
+                                className="btn btn-ghost btn-sm"
+                                onClick={() => navigate(`/question-bank?gameId=${game.id}`)}
+                            >
+                                📦 Open Question Bank
+                            </button>
+                        </div>
                         <div className="category-list">
                             {game.categories.map(cat => (
                                 <div key={cat.id} className="category-item">
@@ -274,13 +347,55 @@ export default function HostSetup({ game, setGame, loadGame, sendSocketMessage }
                                         <div className="category-title-row">
                                             <div className="category-icon">📚</div>
                                             <div>
-                                                <div className="category-name">{cat.name}</div>
+                                                {editingCategoryId === cat.id ? (
+                                                    <div className="category-rename-row">
+                                                        <input
+                                                            type="text"
+                                                            className="form-input category-rename-input"
+                                                            value={editingCategoryName}
+                                                            onChange={e => setEditingCategoryName(e.target.value)}
+                                                            onKeyDown={e => {
+                                                                if (e.key === 'Enter') saveRenameCategory(cat.id, cat.name);
+                                                                if (e.key === 'Escape') cancelRenameCategory();
+                                                            }}
+                                                            disabled={renamingCategoryId === cat.id}
+                                                            aria-label="Topic name"
+                                                            autoFocus
+                                                        />
+                                                        <button
+                                                            className="btn btn-primary btn-sm"
+                                                            onClick={() => saveRenameCategory(cat.id, cat.name)}
+                                                            disabled={renamingCategoryId === cat.id}
+                                                        >
+                                                            {renamingCategoryId === cat.id ? 'Saving...' : 'Save'}
+                                                        </button>
+                                                        <button
+                                                            className="btn btn-ghost btn-sm"
+                                                            onClick={cancelRenameCategory}
+                                                            disabled={renamingCategoryId === cat.id}
+                                                        >
+                                                            Cancel
+                                                        </button>
+                                                    </div>
+                                                ) : (
+                                                    <div className="category-name">{cat.name}</div>
+                                                )}
                                                 <div className="category-q-count">{cat.questions?.length || 0} questions</div>
                                             </div>
                                         </div>
                                         <div className="category-actions">
+                                            <button
+                                                className="btn btn-ghost btn-sm"
+                                                onClick={() => startRenameCategory(cat.id, cat.name)}
+                                                disabled={editingCategoryId === cat.id}
+                                            >
+                                                ✏️ Rename
+                                            </button>
                                             <button className="btn btn-primary btn-sm" onClick={() => generateQuestions(cat.id)} disabled={generatingCatId === cat.id}>
                                                 {generatingCatId === cat.id ? 'Generating...' : '✨ Generate Questions'}
+                                            </button>
+                                            <button className="btn btn-ghost btn-sm" onClick={() => importBestMatches(cat.id)} disabled={importingBestCatId === cat.id || (cat.questions?.length || 0) >= 5}>
+                                                {importingBestCatId === cat.id ? 'Importing...' : '⚡ Import 5 Best Matches'}
                                             </button>
                                             <button className="btn btn-ghost btn-sm" onClick={() => openManualEditor(cat)}>
                                                 ✍️ Manual Entry

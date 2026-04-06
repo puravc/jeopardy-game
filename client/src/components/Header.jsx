@@ -25,7 +25,10 @@ export default function Header() {
             
             <nav className="header-nav">
                 {isAuthenticated && (
-                    <Link to="/dashboard" className="btn btn-ghost btn-sm">Dashboard</Link>
+                    <>
+                        <Link to="/dashboard" className="btn btn-ghost btn-sm">Dashboard</Link>
+                        <Link to="/question-bank" className="btn btn-ghost btn-sm">Question Bank</Link>
+                    </>
                 )}
             </nav>
 

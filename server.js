@@ -3,6 +3,7 @@ const http = require('http');
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const { MongoClient } = require('mongodb');
 const Anthropic = require('@anthropic-ai/sdk');
@@ -42,11 +43,96 @@ async function connectDB() {
     const client = new MongoClient(uri);
     await client.connect();
     db = client.db('jeopardy');
+    await ensureIndexes();
     console.log('✅ Connected to MongoDB');
 }
 
 function gamesCol() {
     return db.collection('games');
+}
+
+function questionBankCol() {
+    return db.collection('question_bank');
+}
+
+function normalizeCategoryName(name) {
+    return (name || '').trim().toLowerCase();
+}
+
+function buildQuestionFingerprint(categoryName, question, answer, value) {
+    const payload = [
+        normalizeCategoryName(categoryName),
+        (question || '').trim().toLowerCase(),
+        (answer || '').trim().toLowerCase(),
+        String(Number(value) || 0),
+    ].join('||');
+    return crypto.createHash('sha256').update(payload).digest('hex');
+}
+
+async function ensureIndexes() {
+    await questionBankCol().createIndex({ id: 1 }, { unique: true });
+    await questionBankCol().createIndex({ fingerprint: 1 }, { unique: true });
+    await questionBankCol().createIndex({ categoryKey: 1, createdAt: -1 });
+    await questionBankCol().createIndex({ createdAt: -1 });
+}
+
+async function upsertQuestionsToBank({ questions, categoryName, sourceGameId = null, sourceType = 'unknown', createdBy = null }) {
+    if (!Array.isArray(questions) || questions.length === 0) return { inserted: 0, updated: 0 };
+
+    const now = new Date().toISOString();
+    const category = (categoryName || '').trim();
+    const categoryKey = normalizeCategoryName(categoryName);
+    let inserted = 0;
+    let updated = 0;
+
+    for (const q of questions) {
+        const clue = (q?.question || '').trim();
+        const answer = (q?.answer || '').trim();
+        const value = Number(q?.value) || 0;
+        if (!clue || !answer || value <= 0) continue;
+
+        const fingerprint = buildQuestionFingerprint(category, clue, answer, value);
+        const existing = await questionBankCol().findOne({ fingerprint }, { projection: { _id: 1 } });
+
+        if (existing) {
+            await questionBankCol().updateOne(
+                { _id: existing._id },
+                {
+                    $set: {
+                        categoryName: category,
+                        categoryKey,
+                        question: clue,
+                        answer,
+                        value,
+                        sourceGameId,
+                        sourceType,
+                        createdBy,
+                        updatedAt: now,
+                    },
+                }
+            );
+            updated += 1;
+        } else {
+            await questionBankCol().insertOne({
+                id: uuidv4(),
+                categoryName: category,
+                categoryKey,
+                question: clue,
+                answer,
+                value,
+                fingerprint,
+                sourceGameId,
+                sourceType,
+                createdBy,
+                usageCount: 0,
+                createdAt: now,
+                updatedAt: now,
+            });
+            inserted += 1;
+        }
+    }
+
+    return { inserted, updated };
 }
 
 // =====================
@@ -94,6 +180,7 @@ const requireAdmin = async (req, res, next) => {
 
 // Apply auth to all /api/games routes
 app.use('/api/games', requireAdmin);
+app.use('/api/questionbank', requireAdmin);
 
 // Admin-only routes
 // GET /api/config — Return API key status
@@ -118,6 +205,112 @@ app.get('/api/games', async (req, res) => {
             updatedAt: g.updatedAt,
         }));
         res.json(summary);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// GET /api/questionbank — List question bank entries with optional filters
+app.get('/api/questionbank', async (req, res) => {
+    try {
+        const category = (req.query.category || '').trim();
+        const search = (req.query.search || '').trim();
+        const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 100));
+        const skip = Math.max(0, Number(req.query.skip) || 0);
+
+        const filter = {};
+        if (category) {
+            filter.categoryKey = normalizeCategoryName(category);
+        }
+        if (search) {
+            const escapedSearch = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const rx = new RegExp(escapedSearch, 'i');
+            filter.$or = [{ question: rx }, { answer: rx }, { categoryName: rx }];
+        }
+
+        const [questions, total, categories] = await Promise.all([
+            questionBankCol()
+                .find(filter, { projection: { _id: 0, fingerprint: 0 } })
+                .sort({ categoryName: 1, value: 1, createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .toArray(),
+            questionBankCol().countDocuments(filter),
+            questionBankCol()
+                .aggregate([
+                    { $group: { _id: '$categoryName', count: { $sum: 1 } } },
+                    { $project: { _id: 0, name: '$_id', count: 1 } },
+                    { $sort: { name: 1 } },
+                ])
+                .toArray(),
+        ]);
+
+        res.json({ questions, total, limit, skip, categories });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// POST /api/questionbank — Add one question manually to the bank
+app.post('/api/questionbank', async (req, res) => {
+    try {
+        const categoryName = (req.body.categoryName || '').trim();
+        const question = (req.body.question || '').trim();
+        const answer = (req.body.answer || '').trim();
+        const value = Number(req.body.value) || 0;
+
+        if (!categoryName || !question || !answer || value <= 0) {
+            return res.status(400).json({ error: 'categoryName, question, answer and positive value are required' });
+        }
+
+        const result = await upsertQuestionsToBank({
+            questions: [{ question, answer, value }],
+            categoryName,
+            sourceType: 'manual',
+            createdBy: req.user.email,
+        });
+
+        const fingerprint = buildQuestionFingerprint(categoryName, question, answer, value);
+        const saved = await questionBankCol().findOne({ fingerprint }, { projection: { _id: 0, fingerprint: 0 } });
+        return res.status(201).json({ saved, ...result });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// DELETE /api/questionbank/:questionId — Remove a question from the bank
+app.delete('/api/questionbank/:questionId', async (req, res) => {
+    try {
+        const result = await questionBankCol().deleteOne({ id: req.params.questionId });
+        if (!result.deletedCount) return res.status(404).json({ error: 'Question not found' });
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// POST /api/questionbank/backfill — Backfill question bank from all historical games
+app.post('/api/questionbank/backfill', async (req, res) => {
+    try {
+        const games = await gamesCol().find({}, { projection: { _id: 0, id: 1, createdBy: 1, categories: 1 } }).toArray();
+        let inserted = 0;
+        let updated = 0;
+
+        for (const game of games) {
+            for (const category of game.categories || []) {
+                const stats = await upsertQuestionsToBank({
+                    questions: category.questions || [],
+                    categoryName: category.name,
+                    sourceGameId: game.id,
+                    sourceType: 'backfill',
+                    createdBy: game.createdBy || null,
+                });
+                inserted += stats.inserted;
+                updated += stats.updated;
+            }
+        }
+
+        res.json({ success: true, inserted, updated, scannedGames: games.length });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -270,20 +463,199 @@ app.delete('/api/games/:id/categories/:catId', async (req, res) => {
     }
 });
 
+// PUT /api/games/:id/categories/:catId — Rename category
+app.put('/api/games/:id/categories/:catId', async (req, res) => {
+    const { name } = req.body;
+    const trimmedName = (name || '').trim();
+    if (!trimmedName) return res.status(400).json({ error: 'Category name is required' });
+
+    try {
+        const result = await gamesCol().findOneAndUpdate(
+            { id: req.params.id, 'categories.id': req.params.catId },
+            { $set: { 'categories.$.name': trimmedName, updatedAt: new Date().toISOString() } },
+            { returnDocument: 'after', projection: { _id: 0, categories: 1 } }
+        );
+        if (!result) return res.status(404).json({ error: 'Game or category not found' });
+
+        const updatedCategory = result.categories.find(c => c.id === req.params.catId);
+        if (!updatedCategory) return res.status(404).json({ error: 'Category not found' });
+        res.json(updatedCategory);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // PUT /api/games/:id/categories/:catId/questions — Update questions
 app.put('/api/games/:id/categories/:catId/questions', async (req, res) => {
     const { questions } = req.body;
     try {
+        const game = await gamesCol().findOne({ id: req.params.id }, { projection: { _id: 0, id: 1, createdBy: 1, categories: 1 } });
+        if (!game) return res.status(404).json({ error: 'Game not found' });
+        const category = game.categories.find(c => c.id === req.params.catId);
+        if (!category) return res.status(404).json({ error: 'Category not found' });
+
         const result = await gamesCol().findOneAndUpdate(
             { id: req.params.id, 'categories.id': req.params.catId },
             { $set: { 'categories.$.questions': questions, updatedAt: new Date().toISOString() } },
             { returnDocument: 'after', projection: { _id: 0 } }
         );
         if (!result) return res.status(404).json({ error: 'Game or category not found' });
+
+        await upsertQuestionsToBank({
+            questions,
+            categoryName: category.name,
+            sourceGameId: game.id,
+            sourceType: 'manual',
+            createdBy: game.createdBy || req.user.email,
+        });
+
         const cat = result.categories.find(c => c.id === req.params.catId);
         res.json(cat);
     } catch (e) {
         res.status(500).json({ error: e.message });
+    }
+});
+
+// POST /api/games/:id/categories/:catId/import-questions — Import questions from question bank
+app.post('/api/games/:id/categories/:catId/import-questions', async (req, res) => {
+    const questionIds = Array.isArray(req.body.questionIds) ? req.body.questionIds : [];
+    if (!questionIds.length) return res.status(400).json({ error: 'questionIds is required' });
+
+    try {
+        const game = await gamesCol().findOne({ id: req.params.id }, { projection: { _id: 0 } });
+        if (!game) return res.status(404).json({ error: 'Game not found' });
+        const category = game.categories.find(c => c.id === req.params.catId);
+        if (!category) return res.status(404).json({ error: 'Category not found' });
+
+        const bankQuestions = await questionBankCol()
+            .find({ id: { $in: questionIds } }, { projection: { _id: 0, id: 1, question: 1, answer: 1, value: 1 } })
+            .toArray();
+
+        if (!bankQuestions.length) return res.status(404).json({ error: 'No matching bank questions found' });
+
+        const existing = Array.isArray(category.questions) ? category.questions : [];
+        const remainingSlots = Math.max(0, 5 - existing.length);
+        if (remainingSlots <= 0) {
+            return res.status(400).json({ error: 'This category already has 5 questions. Remove one before importing.' });
+        }
+
+        const selected = bankQuestions.slice(0, remainingSlots).map(q => ({
+            id: uuidv4(),
+            value: q.value,
+            question: q.question,
+            answer: q.answer,
+            answered: false,
+            answeredBy: null,
+            wrongAnswers: [],
+            sourceQuestionBankId: q.id,
+        }));
+
+        const nextQuestions = [...existing, ...selected];
+        const updated = await gamesCol().findOneAndUpdate(
+            { id: req.params.id, 'categories.id': req.params.catId },
+            { $set: { 'categories.$.questions': nextQuestions, updatedAt: new Date().toISOString() } },
+            { returnDocument: 'after', projection: { _id: 0 } }
+        );
+
+        await questionBankCol().updateMany(
+            { id: { $in: selected.map(q => q.sourceQuestionBankId) } },
+            { $inc: { usageCount: 1 }, $set: { updatedAt: new Date().toISOString() } }
+        );
+
+        const updatedCategory = updated.categories.find(c => c.id === req.params.catId);
+        res.json({
+            category: updatedCategory,
+            importedCount: selected.length,
+            skippedCount: Math.max(0, questionIds.length - selected.length),
+            remainingSlots: Math.max(0, 5 - (updatedCategory.questions?.length || 0)),
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// POST /api/games/:id/categories/:catId/import-best-matches — One-click import by best category matches
+app.post('/api/games/:id/categories/:catId/import-best-matches', async (req, res) => {
+    const requestedLimit = Number(req.body.limit) || 5;
+
+    try {
+        const game = await gamesCol().findOne({ id: req.params.id }, { projection: { _id: 0 } });
+        if (!game) return res.status(404).json({ error: 'Game not found' });
+        const category = game.categories.find(c => c.id === req.params.catId);
+        if (!category) return res.status(404).json({ error: 'Category not found' });
+
+        const existing = Array.isArray(category.questions) ? category.questions : [];
+        const remainingSlots = Math.max(0, 5 - existing.length);
+        if (remainingSlots <= 0) {
+            return res.status(400).json({ error: 'This category already has 5 questions. Remove one before importing.' });
+        }
+
+        const limit = Math.min(remainingSlots, Math.max(1, requestedLimit));
+        const categoryKey = normalizeCategoryName(category.name);
+        const existingFingerprints = new Set(
+            existing.map(q => buildQuestionFingerprint(category.name, q.question, q.answer, q.value))
+        );
+
+        let candidates = await questionBankCol()
+            .find({ categoryKey }, { projection: { _id: 0, id: 1, question: 1, answer: 1, value: 1, usageCount: 1, updatedAt: 1 } })
+            .sort({ usageCount: -1, updatedAt: -1, value: 1 })
+            .limit(50)
+            .toArray();
+
+        // Fallback: if no exact category match exists, use loose name matching.
+        if (!candidates.length) {
+            const escaped = category.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            candidates = await questionBankCol()
+                .find({ categoryName: { $regex: escaped, $options: 'i' } }, { projection: { _id: 0, id: 1, question: 1, answer: 1, value: 1, usageCount: 1, updatedAt: 1 } })
+                .sort({ usageCount: -1, updatedAt: -1, value: 1 })
+                .limit(50)
+                .toArray();
+        }
+
+        const picked = [];
+        for (const candidate of candidates) {
+            if (picked.length >= limit) break;
+            const fp = buildQuestionFingerprint(category.name, candidate.question, candidate.answer, candidate.value);
+            if (existingFingerprints.has(fp)) continue;
+            existingFingerprints.add(fp);
+            picked.push(candidate);
+        }
+
+        if (!picked.length) {
+            return res.status(404).json({ error: `No suitable bank matches found for "${category.name}".` });
+        }
+
+        const imported = picked.map(q => ({
+            id: uuidv4(),
+            value: q.value,
+            question: q.question,
+            answer: q.answer,
+            answered: false,
+            answeredBy: null,
+            wrongAnswers: [],
+            sourceQuestionBankId: q.id,
+        }));
+
+        const nextQuestions = [...existing, ...imported];
+        const updated = await gamesCol().findOneAndUpdate(
+            { id: req.params.id, 'categories.id': req.params.catId },
+            { $set: { 'categories.$.questions': nextQuestions, updatedAt: new Date().toISOString() } },
+            { returnDocument: 'after', projection: { _id: 0 } }
+        );
+
+        await questionBankCol().updateMany(
+            { id: { $in: imported.map(q => q.sourceQuestionBankId) } },
+            { $inc: { usageCount: 1 }, $set: { updatedAt: new Date().toISOString() } }
+        );
+
+        const updatedCategory = updated.categories.find(c => c.id === req.params.catId);
+        return res.json({
+            category: updatedCategory,
+            importedCount: imported.length,
+            remainingSlots: Math.max(0, 5 - (updatedCategory.questions?.length || 0)),
+        });
+    } catch (e) {
+        return res.status(500).json({ error: e.message });
     }
 });
 
@@ -331,6 +703,14 @@ Return ONLY a valid JSON array:
             { id: req.params.id, 'categories.id': categoryId },
             { $set: { 'categories.$.questions': questions, updatedAt: new Date().toISOString() } }
         );
+
+        await upsertQuestionsToBank({
+            questions,
+            categoryName: category.name,
+            sourceGameId: game.id,
+            sourceType: 'ai_generated',
+            createdBy: game.createdBy || req.user.email,
+        });
 
         // Return the updated category back to the client
         const updatedGame = await gamesCol().findOne({ id: req.params.id }, { projection: { _id: 0 } });

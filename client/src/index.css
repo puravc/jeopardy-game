@@ -412,6 +412,97 @@ h3 {
     box-shadow: inset 0 0 0 1px rgba(79, 142, 247, 0.25);
 }
 
+.qb-header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+}
+
+.qb-header-actions {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+}
+
+.qb-filter-row {
+    display: grid;
+    grid-template-columns: 1fr 220px auto;
+    gap: 0.6rem;
+}
+
+.qb-import-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+}
+
+.qb-import-controls {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+}
+
+.qb-category-card {
+    margin-bottom: 1rem;
+}
+
+.qb-category-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.75rem;
+}
+
+.qb-question-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 0.75rem;
+}
+
+.qb-question-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.75rem;
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.qb-question-card.selected {
+    border-color: var(--border-gold);
+    box-shadow: 0 0 0 1px rgba(245, 197, 66, 0.2);
+}
+
+.qb-check-row {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    margin-bottom: 0.4rem;
+}
+
+.qb-card-footer {
+    margin-top: 0.7rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+@media (max-width: 900px) {
+    .qb-filter-row {
+        grid-template-columns: 1fr;
+    }
+
+    .qb-import-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .qb-import-controls {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}
+
 .player-buzzer-order-rank {
     min-width: 3rem;
     font-family: 'Bebas Neue', sans-serif;
@@ -2486,6 +2577,18 @@ h3 {
     font-size: 0.95rem;
 }
 
+.category-rename-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.category-rename-input {
+    min-width: 220px;
+    max-width: 320px;
+    padding: 0.45rem 0.6rem;
+}
+
 .category-q-count {
     font-size: 0.78rem;
     color: var(--text-muted);
@@ -3669,6 +3772,17 @@ h3 {
     .category-actions {
         width: 100%;
         flex-wrap: wrap;
+    }
+
+    .category-rename-row {
+        width: 100%;
+        flex-wrap: wrap;
+    }
+
+    .category-rename-input {
+        min-width: 0;
+        max-width: none;
+        width: 100%;
     }
 
     .category-actions .btn {
