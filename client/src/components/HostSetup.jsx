@@ -2,11 +2,16 @@ import React, { useState } from 'react';
 import { API } from '../utils/api';
 
 export default function HostSetup({ game, setGame, loadGame, sendSocketMessage }) {
+    const QUESTION_VALUES = [200, 400, 600, 800, 1000];
     const [activeTab, setActiveTab] = useState('game-info');
     const [gameName, setGameName] = useState(game.name || '');
     const [playerName, setPlayerName] = useState('');
     const [categoryName, setCategoryName] = useState('');
     const [generatingCatId, setGeneratingCatId] = useState(null);
+    const [manualCategoryId, setManualCategoryId] = useState(null);
+    const [manualQuestions, setManualQuestions] = useState([]);
+    const [manualSaving, setManualSaving] = useState(false);
+    const [manualError, setManualError] = useState('');
     const joinUrl = `${window.location.origin}/join`;
 
     const qCount = game.categories.reduce((acc, cat) => acc + (cat.questions?.length || 0), 0);
@@ -88,6 +93,79 @@ export default function HostSetup({ game, setGame, loadGame, sendSocketMessage }
         }
     };
 
+    const buildInitialManualQuestions = (category) => {
+        return QUESTION_VALUES.map((defaultValue, index) => {
+            const source = category.questions?.[index] || null;
+            return {
+                id: source?.id || crypto.randomUUID(),
+                value: source?.value ?? defaultValue,
+                question: source?.question || '',
+                answer: source?.answer || '',
+                answered: false,
+                answeredBy: null,
+            };
+        });
+    };
+
+    const openManualEditor = (category) => {
+        setManualCategoryId(category.id);
+        setManualQuestions(buildInitialManualQuestions(category));
+        setManualError('');
+    };
+
+    const closeManualEditor = () => {
+        if (manualSaving) return;
+        setManualCategoryId(null);
+        setManualQuestions([]);
+        setManualError('');
+    };
+
+    const updateManualQuestion = (index, field, value) => {
+        setManualQuestions(prev => prev.map((q, i) => {
+            if (i !== index) return q;
+            if (field === 'value') {
+                return { ...q, value: Number(value) || 0 };
+            }
+            return { ...q, [field]: value };
+        }));
+    };
+
+    const saveManualQuestions = async () => {
+        const normalized = manualQuestions.map((q, idx) => ({
+            ...q,
+            value: Number(q.value) || QUESTION_VALUES[idx],
+            question: (q.question || '').trim(),
+            answer: (q.answer || '').trim(),
+            answered: false,
+            answeredBy: null,
+        }));
+
+        const incomplete = normalized.some(q => !q.question || !q.answer || q.value <= 0);
+        if (incomplete) {
+            setManualError('Complete all 5 rows with a positive value, clue, and answer.');
+            return;
+        }
+
+        setManualSaving(true);
+        setManualError('');
+        try {
+            const updatedCategory = await API.updateQuestions(game.id, manualCategoryId, normalized);
+            if (updatedCategory && setGame) {
+                setGame(prev => ({
+                    ...prev,
+                    categories: prev.categories.map(c => c.id === manualCategoryId ? updatedCategory : c),
+                }));
+            } else {
+                await loadGame();
+            }
+            closeManualEditor();
+        } catch (e) {
+            setManualError(e.message || 'Failed to save questions');
+        } finally {
+            setManualSaving(false);
+        }
+    };
+
     const handleLaunch = async () => {
         console.debug('Start Game clicked for', game.id);
         try {
@@ -108,6 +186,7 @@ export default function HostSetup({ game, setGame, loadGame, sendSocketMessage }
         { ok: game.categories.length > 0 && game.categories.every(c => c.questions && c.questions.length >= 5), label: 'All topics have questions (5+)' },
     ];
     const canLaunch = checks.every(c => c.ok);
+    const manualCategory = game.categories.find(c => c.id === manualCategoryId);
 
     return (
         <div className="admin-layout">
@@ -203,6 +282,9 @@ export default function HostSetup({ game, setGame, loadGame, sendSocketMessage }
                                             <button className="btn btn-primary btn-sm" onClick={() => generateQuestions(cat.id)} disabled={generatingCatId === cat.id}>
                                                 {generatingCatId === cat.id ? 'Generating...' : '✨ Generate Questions'}
                                             </button>
+                                            <button className="btn btn-ghost btn-sm" onClick={() => openManualEditor(cat)}>
+                                                ✍️ Manual Entry
+                                            </button>
                                             <button className="btn btn-danger btn-sm" onClick={() => removeCategory(cat.id)}>✕</button>
                                         </div>
                                         <div className="category-hint-row">
@@ -252,6 +334,57 @@ export default function HostSetup({ game, setGame, loadGame, sendSocketMessage }
                     </section>
                 )}
             </main>
+
+            {manualCategoryId && (
+                <div className="modal-overlay open" onClick={closeManualEditor}>
+                    <div className="modal-card manual-editor-card" onClick={e => e.stopPropagation()}>
+                        <h3 className="modal-title">MANUAL QUESTIONS</h3>
+                        <p className="modal-sub">{manualCategory?.name || 'Category'} • Enter 5 clues and answers.</p>
+
+                        <div className="manual-list">
+                            {manualQuestions.map((q, index) => (
+                                <div className="manual-row" key={q.id}>
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        className="form-input"
+                                        value={q.value}
+                                        onChange={e => updateManualQuestion(index, 'value', e.target.value)}
+                                        aria-label={`Question ${index + 1} value`}
+                                    />
+                                    <div className="manual-fields">
+                                        <textarea
+                                            className="form-textarea"
+                                            value={q.question}
+                                            onChange={e => updateManualQuestion(index, 'question', e.target.value)}
+                                            placeholder={`Clue ${index + 1}`}
+                                            rows={2}
+                                        />
+                                        <input
+                                            type="text"
+                                            className="form-input"
+                                            value={q.answer}
+                                            onChange={e => updateManualQuestion(index, 'answer', e.target.value)}
+                                            placeholder="Answer"
+                                        />
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+
+                        {manualError && <div className="manual-error">{manualError}</div>}
+
+                        <div className="modal-actions">
+                            <button className="btn btn-primary" onClick={saveManualQuestions} disabled={manualSaving}>
+                                {manualSaving ? 'Saving...' : '💾 Save Questions'}
+                            </button>
+                            <button className="btn btn-ghost btn-modal-cancel" onClick={closeManualEditor} disabled={manualSaving}>
+                                ✕ Cancel
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

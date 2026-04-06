@@ -26,6 +26,12 @@ export function useGameState(gameId, isHost = true) {
             name: player.name,
             score: player.score
         })),
+        categories: (snapshot?.categories || []).map(category => ({
+            id: category.id,
+            name: category.name,
+            questionCount: category.questions?.length || 0,
+            questionIds: (category.questions || []).map(question => question.id),
+        })),
     });
 
     const haveMeaningfulChanges = (currentSnapshot, nextSnapshot) => {

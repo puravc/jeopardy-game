@@ -1711,6 +1711,40 @@ h3 {
 .modal-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.5rem; }
 .modal-actions .btn { flex: 1; min-width: 180px; }
 
+.manual-editor-card {
+    max-width: 920px;
+}
+
+.manual-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-top: 1rem;
+}
+
+.manual-row {
+    display: grid;
+    grid-template-columns: 90px 1fr;
+    gap: 0.75rem;
+    align-items: start;
+}
+
+.manual-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+
+.manual-fields .form-textarea {
+    min-height: 74px;
+}
+
+.manual-error {
+    margin-top: 0.75rem;
+    color: var(--danger);
+    font-size: 0.85rem;
+}
+
 @media (max-width: 640px) {
     .modal-card { padding: 1rem; margin: 0 1rem; }
     .modal-actions { flex-direction: column; }
