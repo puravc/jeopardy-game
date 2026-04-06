@@ -1,43 +1,58 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { API } from '../utils/api';
 
 const AuthContext = createContext();
 
 export function AuthProvider({ children }) {
-    const [token, setToken] = useState(() => localStorage.getItem('admin_token'));
+    const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [email, setEmail] = useState('');
+    const [authLoading, setAuthLoading] = useState(true);
     const navigate = useNavigate();
 
     useEffect(() => {
-        if (token) {
+        let isCancelled = false;
+        async function hydrateSession() {
             try {
-                const payload = JSON.parse(atob(token.split('.')[1]));
-                if (payload.exp * 1000 > Date.now()) {
-                    setEmail(payload.email);
-                } else {
-                    logout();
+                const session = await API.getSession();
+                if (!isCancelled) {
+                    setEmail(session.email || '');
+                    setIsAuthenticated(Boolean(session.email));
                 }
-            } catch (e) {
-                logout();
+            } catch (err) {
+                if (!isCancelled) {
+                    setEmail('');
+                    setIsAuthenticated(false);
+                }
+            } finally {
+                if (!isCancelled) setAuthLoading(false);
             }
         }
-    }, [token]);
 
-    const login = (jwt) => {
-        localStorage.setItem('admin_token', jwt);
-        setToken(jwt);
+        hydrateSession();
+        return () => { isCancelled = true; };
+    }, []);
+
+    const login = async (jwt) => {
+        const session = await API.createSession(jwt);
+        setEmail(session.email || '');
+        setIsAuthenticated(Boolean(session.email));
         navigate('/dashboard');
     };
 
-    const logout = () => {
-        localStorage.removeItem('admin_token');
-        setToken(null);
+    const logout = async () => {
+        try {
+            await API.logoutSession();
+        } catch (err) {
+            // Non-fatal: proceed with local auth reset even if request fails.
+        }
         setEmail('');
+        setIsAuthenticated(false);
         navigate('/');
     };
 
     return (
-        <AuthContext.Provider value={{ token, email, login, logout, isAuthenticated: !!token }}>
+        <AuthContext.Provider value={{ email, login, logout, isAuthenticated, authLoading }}>
             {children}
         </AuthContext.Provider>
     );

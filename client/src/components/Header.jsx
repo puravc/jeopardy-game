@@ -3,8 +3,10 @@ import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 export default function Header() {
-    const { isAuthenticated, email, logout } = useAuth();
+    const { isAuthenticated, email, logout, authLoading } = useAuth();
     const location = useLocation();
+
+    if (authLoading) return null;
 
     // Do not show global header on the landing page if not authenticated
     if (!isAuthenticated && location.pathname === '/') {

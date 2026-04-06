@@ -18,7 +18,10 @@ export default function LandingPage() {
                     client_id: clientId,
                     callback: (response) => {
                         if (response.credential) {
-                            login(response.credential);
+                            login(response.credential).catch((err) => {
+                                console.error('Failed to establish admin session:', err);
+                                alert(err.message || 'Unable to sign in right now. Please try again.');
+                            });
                         }
                     }
                 });

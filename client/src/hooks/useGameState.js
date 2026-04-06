@@ -125,7 +125,7 @@ export function useGameState(gameId, isHost = true) {
                 type: isHost ? 'host_join' : 'player_join', 
                 gameId,
                 playerName: playerName,
-                playerId: playerId
+                playerId: playerId,
             }));
         };
 

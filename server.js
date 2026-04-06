@@ -2,6 +2,9 @@ require('dotenv').config();
 const http = require('http');
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const cookieParser = require('cookie-parser');
 const path = require('path');
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
@@ -21,10 +24,69 @@ function generateJoinCode() {
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const SESSION_COOKIE_NAME = 'admin_token';
+const CSRF_COOKIE_NAME = 'csrf_token';
+const isProduction = process.env.NODE_ENV === 'production';
+
+const sessionCookieOptions = {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: 'lax',
+    path: '/',
+    maxAge: 60 * 60 * 1000,
+};
+
+const csrfCookieOptions = {
+    httpOnly: false,
+    secure: isProduction,
+    sameSite: 'lax',
+    path: '/',
+    maxAge: 60 * 60 * 1000,
+};
+
+const defaultAllowedOrigins = ['http://localhost:5173', 'http://localhost:3000'];
+const configuredOrigins = (process.env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map(origin => origin.trim())
+    .filter(Boolean);
+const allowedOrigins = configuredOrigins.length ? configuredOrigins : defaultAllowedOrigins;
+
+const corsOptions = {
+    origin(origin, callback) {
+        // Allow non-browser requests and same-origin requests with no Origin header.
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.includes(origin)) return callback(null, true);
+        return callback(new Error('Not allowed by CORS'));
+    },
+    credentials: true,
+};
+
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: Number(process.env.API_RATE_LIMIT_MAX) || 600,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests, please try again later.' },
+});
+
+const joinLimiter = rateLimit({
+    windowMs: 5 * 60 * 1000,
+    max: Number(process.env.JOIN_RATE_LIMIT_MAX) || 60,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many join attempts, please try again shortly.' },
+});
 
 // Middleware
-app.use(cors());
-app.use(express.json());
+app.set('trust proxy', 1);
+app.use(cors(corsOptions));
+app.use(helmet({
+    contentSecurityPolicy: false,
+    // Google Sign-In popup requires opener relationship to remain available.
+    crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
+}));
+app.use(express.json({ limit: '50kb' }));
+app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'client', 'dist')));
 
 // Simple request logger
@@ -32,6 +94,27 @@ app.use((req, res, next) => {
     console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
     next();
 });
+
+app.use('/api', apiLimiter);
+app.use('/api/join', joinLimiter);
+
+function parseCookieHeader(cookieHeader = '') {
+    const parsed = {};
+    for (const pair of cookieHeader.split(';')) {
+        const trimmed = pair.trim();
+        if (!trimmed) continue;
+        const idx = trimmed.indexOf('=');
+        if (idx === -1) continue;
+        const key = decodeURIComponent(trimmed.slice(0, idx));
+        const value = decodeURIComponent(trimmed.slice(idx + 1));
+        parsed[key] = value;
+    }
+    return parsed;
+}
+
+function createCsrfToken() {
+    return crypto.randomBytes(24).toString('hex');
+}
 
 // =====================
 // MongoDB Setup
@@ -150,28 +233,82 @@ function getAI() {
 // =====================
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
+function getAllowedAdminEmails() {
+    return process.env.ADMIN_EMAILS
+        ? process.env.ADMIN_EMAILS.split(',').map(e => e.trim().toLowerCase()).filter(Boolean)
+        : [];
+}
+
+async function verifyAdminIdToken(idToken) {
+    const ticket = await googleClient.verifyIdToken({
+        idToken,
+        audience: process.env.GOOGLE_CLIENT_ID,
+    });
+    const payload = ticket.getPayload();
+    const email = payload?.email?.toLowerCase();
+    if (!email) {
+        throw new Error('Invalid token payload');
+    }
+
+    const allowedEmails = getAllowedAdminEmails();
+    if (allowedEmails.length > 0 && !allowedEmails.includes(email)) {
+        const err = new Error('Forbidden');
+        err.code = 'FORBIDDEN';
+        throw err;
+    }
+
+    return { ...payload, email };
+}
+
+function requireCsrfForMutations(req, res, next) {
+    const method = req.method.toUpperCase();
+    if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) return next();
+    if (req.path === '/auth/session') return next();
+
+    const cookieToken = req.cookies?.[CSRF_COOKIE_NAME];
+    const headerToken = req.headers['x-csrf-token'];
+    if (!cookieToken || !headerToken || cookieToken !== headerToken) {
+        return res.status(403).json({ error: 'Forbidden: Invalid CSRF token' });
+    }
+    return next();
+}
+
+app.use('/api', requireCsrfForMutations);
+
 const requireAdmin = async (req, res, next) => {
     const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    const bearerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : null;
+    const cookieToken = req.cookies?.[SESSION_COOKIE_NAME] || null;
+    const token = bearerToken || cookieToken;
+
+    if (!token) {
         return res.status(401).json({ error: 'Unauthorized: No token provided' });
     }
-    const token = authHeader.split(' ')[1];
+
     try {
-        const ticket = await googleClient.verifyIdToken({
-            idToken: token,
-            audience: process.env.GOOGLE_CLIENT_ID,
-        });
-        const payload = ticket.getPayload();
-        req.user = payload;
-        
-        // Check allowed emails if ADMIN_EMAILS is set
-        const allowedEmails = process.env.ADMIN_EMAILS ? process.env.ADMIN_EMAILS.split(',').map(e => e.trim().toLowerCase()) : [];
-        if (allowedEmails.length > 0 && !allowedEmails.includes(payload.email.toLowerCase())) {
-            return res.status(403).json({ error: 'Forbidden: You are not authorized to be an admin.' });
-        }
+        req.user = await verifyAdminIdToken(token);
         next();
     } catch (err) {
+        if (err.code === 'FORBIDDEN') {
+            return res.status(403).json({ error: 'Forbidden: You are not authorized to be an admin.' });
+        }
         return res.status(401).json({ error: 'Unauthorized: Invalid token' });
+    }
+};
+
+const requireGameOwner = async (req, res, next) => {
+    const gameId = req.params.id;
+    if (!gameId) return res.status(400).json({ error: 'Game ID is required' });
+
+    try {
+        const ownedGame = await gamesCol().findOne(
+            { id: gameId, createdBy: req.user.email.toLowerCase() },
+            { projection: { _id: 0, id: 1, createdBy: 1 } }
+        );
+        if (!ownedGame) return res.status(404).json({ error: 'Game not found' });
+        next();
+    } catch (err) {
+        return res.status(500).json({ error: 'Failed to verify game ownership' });
     }
 };
 
@@ -179,8 +316,40 @@ const requireAdmin = async (req, res, next) => {
 // API Routes
 // =====================
 
+// POST /api/auth/session — Validate Google credential and create server-side session cookies
+app.post('/api/auth/session', async (req, res) => {
+    const token = req.body?.token;
+    if (!token) return res.status(400).json({ error: 'token is required' });
+
+    try {
+        const payload = await verifyAdminIdToken(token);
+        const csrfToken = createCsrfToken();
+        res.cookie(SESSION_COOKIE_NAME, token, sessionCookieOptions);
+        res.cookie(CSRF_COOKIE_NAME, csrfToken, csrfCookieOptions);
+        return res.json({ email: payload.email });
+    } catch (err) {
+        if (err.code === 'FORBIDDEN') {
+            return res.status(403).json({ error: 'Forbidden: You are not authorized to be an admin.' });
+        }
+        return res.status(401).json({ error: 'Unauthorized: Invalid token' });
+    }
+});
+
+// GET /api/auth/session — Return current admin session info
+app.get('/api/auth/session', requireAdmin, async (req, res) => {
+    return res.json({ email: req.user.email });
+});
+
+// POST /api/auth/logout — Clear auth and CSRF cookies
+app.post('/api/auth/logout', (req, res) => {
+    res.clearCookie(SESSION_COOKIE_NAME, { path: '/' });
+    res.clearCookie(CSRF_COOKIE_NAME, { path: '/' });
+    return res.json({ success: true });
+});
+
 // Apply auth to all /api/games routes
 app.use('/api/games', requireAdmin);
+app.use('/api/games/:id', requireGameOwner);
 app.use('/api/questionbank', requireAdmin);
 
 // Admin-only routes
@@ -219,7 +388,7 @@ app.get('/api/questionbank', async (req, res) => {
         const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 100));
         const skip = Math.max(0, Number(req.query.skip) || 0);
 
-        const filter = {};
+        const filter = { createdBy: req.user.email };
         if (category) {
             filter.categoryKey = normalizeCategoryName(category);
         }
@@ -239,6 +408,7 @@ app.get('/api/questionbank', async (req, res) => {
             questionBankCol().countDocuments(filter),
             questionBankCol()
                 .aggregate([
+                    { $match: { createdBy: req.user.email } },
                     { $group: { _id: '$categoryName', count: { $sum: 1 } } },
                     { $project: { _id: 0, name: '$_id', count: 1 } },
                     { $sort: { name: 1 } },
@@ -256,7 +426,7 @@ app.get('/api/questionbank', async (req, res) => {
 app.get('/api/questionbank/export', async (req, res) => {
     try {
         const questions = await questionBankCol()
-            .find({}, { projection: { _id: 0, fingerprint: 0, categoryKey: 0 } })
+            .find({ createdBy: req.user.email }, { projection: { _id: 0, fingerprint: 0, categoryKey: 0 } })
             .sort({ categoryName: 1, value: 1, createdAt: -1 })
             .toArray();
 
@@ -320,7 +490,7 @@ app.post('/api/questionbank', async (req, res) => {
 // DELETE /api/questionbank/:questionId — Remove a question from the bank
 app.delete('/api/questionbank/:questionId', async (req, res) => {
     try {
-        const result = await questionBankCol().deleteOne({ id: req.params.questionId });
+        const result = await questionBankCol().deleteOne({ id: req.params.questionId, createdBy: req.user.email });
         if (!result.deletedCount) return res.status(404).json({ error: 'Question not found' });
         res.json({ success: true });
     } catch (e) {
@@ -331,7 +501,9 @@ app.delete('/api/questionbank/:questionId', async (req, res) => {
 // POST /api/questionbank/backfill — Backfill question bank from all historical games
 app.post('/api/questionbank/backfill', async (req, res) => {
     try {
-        const games = await gamesCol().find({}, { projection: { _id: 0, id: 1, createdBy: 1, categories: 1 } }).toArray();
+        const games = await gamesCol()
+            .find({ createdBy: req.user.email }, { projection: { _id: 0, id: 1, createdBy: 1, categories: 1 } })
+            .toArray();
         let inserted = 0;
         let updated = 0;
 
@@ -397,10 +569,35 @@ app.get('/api/public/games/:id', async (req, res) => {
     try {
         const game = await gamesCol().findOne(
             { id: req.params.id },
-            { projection: { _id: 0, id: 1, name: 1, status: 1, playerMode: 1, players: 1, joinCode: 1, categories: 1, stats: 1, finalJeopardy: 1 } }
+            { projection: { _id: 0, id: 1, name: 1, status: 1, playerMode: 1, players: 1, categories: 1, stats: 1 } }
         );
         if (!game) return res.status(404).json({ error: 'Game not found' });
-        res.json(game);
+
+        const sanitized = {
+            id: game.id,
+            name: game.name,
+            status: game.status,
+            playerMode: game.playerMode,
+            players: (game.players || []).map(player => ({
+                id: player.id,
+                name: player.name,
+                score: player.score,
+            })),
+            categories: (game.categories || []).map(category => ({
+                id: category.id,
+                name: category.name,
+                questions: (category.questions || []).map(question => ({
+                    id: question.id,
+                    value: question.value,
+                    answered: !!question.answered,
+                    answeredBy: question.answered ? question.answeredBy || null : null,
+                    question: question.answered ? question.question : null,
+                })),
+            })),
+            stats: game.stats || {},
+        };
+
+        res.json(sanitized);
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -567,7 +764,7 @@ app.post('/api/games/:id/categories/:catId/import-questions', async (req, res) =
         if (!category) return res.status(404).json({ error: 'Category not found' });
 
         const bankQuestions = await questionBankCol()
-            .find({ id: { $in: questionIds } }, { projection: { _id: 0, id: 1, question: 1, answer: 1, value: 1 } })
+            .find({ id: { $in: questionIds }, createdBy: req.user.email }, { projection: { _id: 0, id: 1, question: 1, answer: 1, value: 1 } })
             .toArray();
 
         if (!bankQuestions.length) return res.status(404).json({ error: 'No matching bank questions found' });
@@ -597,7 +794,7 @@ app.post('/api/games/:id/categories/:catId/import-questions', async (req, res) =
         );
 
         await questionBankCol().updateMany(
-            { id: { $in: selected.map(q => q.sourceQuestionBankId) } },
+            { id: { $in: selected.map(q => q.sourceQuestionBankId) }, createdBy: req.user.email },
             { $inc: { usageCount: 1 }, $set: { updatedAt: new Date().toISOString() } }
         );
 
@@ -636,7 +833,7 @@ app.post('/api/games/:id/categories/:catId/import-best-matches', async (req, res
         );
 
         let candidates = await questionBankCol()
-            .find({ categoryKey }, { projection: { _id: 0, id: 1, question: 1, answer: 1, value: 1, usageCount: 1, updatedAt: 1 } })
+            .find({ categoryKey, createdBy: req.user.email }, { projection: { _id: 0, id: 1, question: 1, answer: 1, value: 1, usageCount: 1, updatedAt: 1 } })
             .sort({ usageCount: -1, updatedAt: -1, value: 1 })
             .limit(50)
             .toArray();
@@ -645,7 +842,7 @@ app.post('/api/games/:id/categories/:catId/import-best-matches', async (req, res
         if (!candidates.length) {
             const escaped = category.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             candidates = await questionBankCol()
-                .find({ categoryName: { $regex: escaped, $options: 'i' } }, { projection: { _id: 0, id: 1, question: 1, answer: 1, value: 1, usageCount: 1, updatedAt: 1 } })
+                .find({ categoryName: { $regex: escaped, $options: 'i' }, createdBy: req.user.email }, { projection: { _id: 0, id: 1, question: 1, answer: 1, value: 1, usageCount: 1, updatedAt: 1 } })
                 .sort({ usageCount: -1, updatedAt: -1, value: 1 })
                 .limit(50)
                 .toArray();
@@ -683,7 +880,7 @@ app.post('/api/games/:id/categories/:catId/import-best-matches', async (req, res
         );
 
         await questionBankCol().updateMany(
-            { id: { $in: imported.map(q => q.sourceQuestionBankId) } },
+            { id: { $in: imported.map(q => q.sourceQuestionBankId) }, createdBy: req.user.email },
             { $inc: { usageCount: 1 }, $set: { updatedAt: new Date().toISOString() } }
         );
 
@@ -1208,24 +1405,53 @@ async function broadcastPlayerList(gameId) {
 const httpServer = http.createServer(app);
 const wss = new WebSocketServer({ server: httpServer });
 
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
+    const socketCookies = parseCookieHeader(req.headers.cookie || '');
+    const sessionToken = socketCookies[SESSION_COOKIE_NAME] || null;
     let assignedGameId = null;
     let assignedPlayerId = null;
+    let assignedPlayerName = null;
     let isHost = false;
+    let buzzCount = 0;
+    let buzzWindowStartedAt = Date.now();
 
     ws.on('message', async (raw) => {
         let msg;
         try { msg = JSON.parse(raw); } catch { return; }
 
-        const { type, gameId, playerName, playerId } = msg;
+        const { type, gameId, playerName } = msg;
 
         if (type === 'host_join') {
-            assignedGameId = gameId;
-            isHost = true;
-            const room = getOrCreateRoom(gameId);
-            room.hostWs = ws;
-            ws.send(JSON.stringify({ type: 'host_joined', gameId }));
-            await broadcastPlayerList(gameId);
+            const token = sessionToken;
+            if (!token) {
+                ws.send(JSON.stringify({ type: 'error', message: 'Host authentication is required.' }));
+                return;
+            }
+
+            try {
+                const payload = await verifyAdminIdToken(token);
+                const hostEmail = payload.email;
+                if (!hostEmail) {
+                    ws.send(JSON.stringify({ type: 'error', message: 'Invalid host token payload.' }));
+                    return;
+                }
+
+                const game = await gamesCol().findOne({ id: gameId }, { projection: { _id: 0, id: 1, createdBy: 1 } });
+                if (!game || game.createdBy?.toLowerCase() !== hostEmail) {
+                    ws.send(JSON.stringify({ type: 'error', message: 'Host is not authorized for this game.' }));
+                    return;
+                }
+
+                assignedGameId = gameId;
+                isHost = true;
+
+                const room = getOrCreateRoom(gameId);
+                room.hostWs = ws;
+                ws.send(JSON.stringify({ type: 'host_joined', gameId }));
+                await broadcastPlayerList(gameId);
+            } catch (e) {
+                ws.send(JSON.stringify({ type: 'error', message: 'Host authentication failed.' }));
+            }
         }
 
         else if (type === 'player_join') {
@@ -1255,9 +1481,11 @@ wss.on('connection', (ws) => {
             
             if (existingPlayer) {
                 assignedPlayerId = existingPlayer.id;
+                assignedPlayerName = existingPlayer.name;
                 console.log(`Player re-join: ${playerName.trim()} (${assignedPlayerId})`);
             } else {
                 assignedPlayerId = uuidv4();
+                assignedPlayerName = playerName.trim();
                 const newPlayer = { id: assignedPlayerId, name: playerName.trim(), score: 0 };
                 // Persist player to MongoDB
                 await db.collection('games').updateOne(
@@ -1268,7 +1496,7 @@ wss.on('connection', (ws) => {
             }
 
             const room = getOrCreateRoom(gameId);
-            room.players.set(assignedPlayerId, { ws, name: playerName.trim(), id: assignedPlayerId });
+            room.players.set(assignedPlayerId, { ws, name: assignedPlayerName || playerName.trim(), id: assignedPlayerId });
             ws.send(JSON.stringify({ type: 'player_joined', playerId: assignedPlayerId, gameId,
                 questionOpen: room.questionOpen,
                 timeoutAt: room.timeoutAt || null }));
@@ -1285,7 +1513,12 @@ wss.on('connection', (ws) => {
 
 
         else if (type === 'open_question') {
-            const room = rooms.get(gameId);
+            if (!isHost || !assignedGameId || (gameId && gameId !== assignedGameId)) {
+                ws.send(JSON.stringify({ type: 'error', message: 'Only the authenticated host can open questions.' }));
+                return;
+            }
+
+            const room = rooms.get(assignedGameId);
             if (!room) return;
             room.buzzerQueue = [];
             room.questionOpen = true;
@@ -1294,22 +1527,42 @@ wss.on('connection', (ws) => {
         }
 
         else if (type === 'close_question') {
-            const room = rooms.get(gameId);
+            if (!isHost || !assignedGameId || (gameId && gameId !== assignedGameId)) {
+                ws.send(JSON.stringify({ type: 'error', message: 'Only the authenticated host can close questions.' }));
+                return;
+            }
+
+            const room = rooms.get(assignedGameId);
             if (!room) return;
             room.questionOpen = false;
             broadcast(room, { type: 'question_closed' });
         }
 
         else if (type === 'buzz') {
-            const room = rooms.get(gameId);
-            if (!room || !room.questionOpen) return;
-            const buzzerIdentifier = playerId || playerName?.trim().toLowerCase();
-            if (!buzzerIdentifier) return;
+            if (!assignedGameId || !assignedPlayerId || isHost) {
+                ws.send(JSON.stringify({ type: 'error', message: 'Only joined players can buzz.' }));
+                return;
+            }
 
-            // prevent double-buzz from the same player, even if a join id is not ready yet
-            if (room.buzzerQueue.some(b => (b.playerId || b.name?.trim().toLowerCase()) === buzzerIdentifier)) return;
-            const resolvedName = playerName || room.players.get(playerId)?.name || 'Unknown player';
-            const buzzEntry = { playerId, name: resolvedName, time: Date.now() };
+            const now = Date.now();
+            if (now - buzzWindowStartedAt >= 60000) {
+                buzzWindowStartedAt = now;
+                buzzCount = 0;
+            }
+            if (buzzCount >= 30) {
+                ws.send(JSON.stringify({ type: 'error', message: 'Buzzer rate limit exceeded. Please wait.' }));
+                return;
+            }
+            buzzCount += 1;
+
+            const room = rooms.get(assignedGameId);
+            if (!room || !room.questionOpen) return;
+
+            // Always use socket-bound identity; ignore any client-supplied playerId/playerName.
+            if (room.buzzerQueue.some(b => b.playerId === assignedPlayerId)) return;
+
+            const resolvedName = assignedPlayerName || room.players.get(assignedPlayerId)?.name || 'Unknown player';
+            const buzzEntry = { playerId: assignedPlayerId, name: resolvedName, time: Date.now() };
             room.buzzerQueue.push(buzzEntry);
             broadcast(room, { type: 'buzz', buzz: buzzEntry, queue: room.buzzerQueue });
             broadcast(room, { type: 'buzzer_update', queue: room.buzzerQueue });

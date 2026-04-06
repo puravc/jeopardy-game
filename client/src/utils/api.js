@@ -1,14 +1,21 @@
 export const API = {
     base: import.meta.env.PROD ? '/api' : 'http://localhost:3000/api',
 
+    getCsrfToken() {
+        if (typeof document === 'undefined') return null;
+        const match = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
+        return match ? decodeURIComponent(match[1]) : null;
+    },
+
     async request(method, path, body) {
         const opts = {
             method,
             headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
         };
-        const token = localStorage.getItem('admin_token');
-        if (token) {
-            opts.headers['Authorization'] = 'Bearer ' + token;
+        const csrfToken = this.getCsrfToken();
+        if (csrfToken && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method.toUpperCase())) {
+            opts.headers['X-CSRF-Token'] = csrfToken;
         }
         if (body !== undefined) opts.body = JSON.stringify(body);
         console.debug('API request', method, this.base + path, body);
@@ -24,6 +31,10 @@ export const API = {
     post: (p, b) => API.request('POST', p, b),
     put: (p, b) => API.request('PUT', p, b),
     del: (p) => API.request('DELETE', p),
+
+    createSession: (token) => API.post('/auth/session', { token }),
+    getSession: () => API.get('/auth/session'),
+    logoutSession: () => API.post('/auth/logout'),
 
     listGames: () => API.get('/games'),
     createGame: (name, playerMode) => API.post('/games', { name, playerMode }),
@@ -62,9 +73,7 @@ export const API = {
     deleteQuestionBankQuestion: (questionId) => API.del(`/questionbank/${questionId}`),
     backfillQuestionBank: () => API.post('/questionbank/backfill'),
     downloadQuestionBankExcel: async () => {
-        const token = localStorage.getItem('admin_token');
-        const headers = token ? { Authorization: 'Bearer ' + token } : {};
-        const res = await fetch(`${API.base}/questionbank/export`, { method: 'GET', headers });
+        const res = await fetch(`${API.base}/questionbank/export`, { method: 'GET', credentials: 'include' });
 
         if (!res.ok) {
             let data = null;
