@@ -6,6 +6,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const { MongoClient } = require('mongodb');
+const XLSX = require('xlsx');
 const Anthropic = require('@anthropic-ai/sdk');
 const { OAuth2Client } = require('google-auth-library');
 const { WebSocketServer } = require('ws');
@@ -246,6 +247,44 @@ app.get('/api/questionbank', async (req, res) => {
         ]);
 
         res.json({ questions, total, limit, skip, categories });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// GET /api/questionbank/export — Export all question bank entries to Excel
+app.get('/api/questionbank/export', async (req, res) => {
+    try {
+        const questions = await questionBankCol()
+            .find({}, { projection: { _id: 0, fingerprint: 0, categoryKey: 0 } })
+            .sort({ categoryName: 1, value: 1, createdAt: -1 })
+            .toArray();
+
+        const rows = questions.map(q => ({
+            ID: q.id || '',
+            Category: q.categoryName || '',
+            Value: Number(q.value) || 0,
+            Question: q.question || '',
+            Answer: q.answer || '',
+            UsageCount: Number(q.usageCount) || 0,
+            SourceType: q.sourceType || '',
+            SourceGameId: q.sourceGameId || '',
+            CreatedBy: q.createdBy || '',
+            CreatedAt: q.createdAt || '',
+            UpdatedAt: q.updatedAt || '',
+        }));
+
+        const workbook = XLSX.utils.book_new();
+        const worksheet = XLSX.utils.json_to_sheet(rows);
+        XLSX.utils.book_append_sheet(workbook, worksheet, 'Question Bank');
+
+        const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+        const stamp = new Date().toISOString().slice(0, 10);
+        const filename = `question-bank-${stamp}.xlsx`;
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.send(buffer);
     } catch (e) {
         res.status(500).json({ error: e.message });
     }

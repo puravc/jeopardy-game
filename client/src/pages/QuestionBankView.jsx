@@ -19,6 +19,7 @@ export default function QuestionBankView() {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [backfilling, setBackfilling] = useState(false);
+    const [exporting, setExporting] = useState(false);
     const [error, setError] = useState('');
 
     const [search, setSearch] = useState('');
@@ -127,6 +128,18 @@ export default function QuestionBankView() {
         }
     };
 
+    const handleExportExcel = async () => {
+        setExporting(true);
+        setError('');
+        try {
+            await API.downloadQuestionBankExcel();
+        } catch (e) {
+            setError(e.message || 'Export failed');
+        } finally {
+            setExporting(false);
+        }
+    };
+
     return (
         <div className="app-wrapper" style={{ padding: '2rem' }}>
             <div style={{ width: '100%', maxWidth: '1200px', margin: '0 auto' }}>
@@ -137,6 +150,9 @@ export default function QuestionBankView() {
                     </div>
                     <div className="qb-header-actions">
                         {gameId && <button className="btn btn-ghost btn-sm" onClick={() => navigate(`/host/${gameId}`)}>← Back to Host Setup</button>}
+                        <button className="btn btn-primary btn-sm" onClick={handleExportExcel} disabled={exporting}>
+                            {exporting ? 'Exporting...' : '⬇ Download Excel'}
+                        </button>
                         <button className="btn btn-ghost btn-sm" onClick={runBackfill} disabled={backfilling}>{backfilling ? 'Backfilling...' : '↻ Backfill Existing Games'}</button>
                     </div>
                 </div>

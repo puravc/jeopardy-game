@@ -61,6 +61,31 @@ export const API = {
     createQuestionBankQuestion: (categoryName, question, answer, value) => API.post('/questionbank', { categoryName, question, answer, value }),
     deleteQuestionBankQuestion: (questionId) => API.del(`/questionbank/${questionId}`),
     backfillQuestionBank: () => API.post('/questionbank/backfill'),
+    downloadQuestionBankExcel: async () => {
+        const token = localStorage.getItem('admin_token');
+        const headers = token ? { Authorization: 'Bearer ' + token } : {};
+        const res = await fetch(`${API.base}/questionbank/export`, { method: 'GET', headers });
+
+        if (!res.ok) {
+            let data = null;
+            try { data = await res.json(); } catch (e) { data = null; }
+            throw new Error(data?.error || 'Failed to export question bank');
+        }
+
+        const blob = await res.blob();
+        const disposition = res.headers.get('content-disposition') || '';
+        const filenameMatch = disposition.match(/filename="?([^\"]+)"?/i);
+        const filename = filenameMatch?.[1] || 'question-bank.xlsx';
+
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.URL.revokeObjectURL(url);
+    },
 
     // Gameplay
     startGame: (id) => API.post(`/games/${id}/start`),
