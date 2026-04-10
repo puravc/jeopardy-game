@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { API } from '../utils/api';
 
-export default function QuestionModal({ game, activeQuestion, onClose, onAward, onDeduct, onSkip, buzzerQueue, questionTimer, loadGame }) {
+export default function QuestionModal({ game, activeQuestion, onClose, onAward, onDeduct, onSkip, buzzerQueue, questionTimer, loadGame, disableScoring = false }) {
     const [showingAnswer, setShowingAnswer] = useState(false);
     const [processingId, setProcessingId] = useState(null); // ID of player being processed
     const [, setTick] = useState(0);
@@ -29,7 +29,7 @@ export default function QuestionModal({ game, activeQuestion, onClose, onAward, 
                 <div className="modal-value">${question.value}</div>
                 <div className="modal-question">{question.question}</div>
 
-                {question.wrongAnswers?.length > 0 && (
+                {question.wrongAnswers?.length > 0 && !disableScoring && (
                     <div style={{ textAlign: 'center', marginBottom: '0.5rem' }}>
                         <button className="btn btn-ghost btn-sm" onClick={async () => {
                             if (window.confirm('Reset all wrong guesses for this question?')) {
@@ -89,57 +89,72 @@ export default function QuestionModal({ game, activeQuestion, onClose, onAward, 
 
                 <div className="modal-award-section">
                     <div className="modal-award-title">Who answered?</div>
-                    <div className="player-award-grid">
-                        {game.players.map(p => {
-                            const hasGuessedWrong = question.wrongAnswers?.includes(p.id);
-                            const wasRight = question.answered && question.answeredBy === p.id;
-                            return (
-                                <div key={p.id} className={`player-award-card ${wasRight ? 'active' : ''}`} style={{ border: wasRight ? '2px solid var(--green)' : '1px solid var(--border)' }}>
-                                    <div>{p.name} {hasGuessedWrong && <span style={{fontSize: '0.7rem', color: 'var(--red)'}}>(Wrong)</span>}</div>
-                                    <div style={{ display: 'flex', gap: '0.25rem', justifyContent: 'center', marginTop: '0.5rem' }}>
-                                        <button 
-                                            className="btn btn-primary btn-sm" 
-                                            style={{ padding: '0.2rem 0.5rem' }} 
-                                            disabled={!!processingId}
-                                            onClick={async () => { 
-                                                setProcessingId(p.id);
-                                                try {
-                                                    await onAward(p.id); 
-                                                } catch (err) {
-                                                    alert('Award failed: ' + err.message);
-                                                } finally {
-                                                    setProcessingId(null);
-                                                    setShowingAnswer(false); 
-                                                }
-                                            }}
-                                        >
-                                            {processingId === p.id ? '...' : '✅ Right'}
-                                        </button>
-                                        <button 
-                                            className="btn btn-danger btn-sm" 
-                                            style={{ padding: '0.2rem 0.5rem' }} 
-                                            disabled={!!processingId}
-                                            onClick={async () => {
-                                                setProcessingId(p.id);
-                                                try {
-                                                    await onDeduct(p.id);
-                                                } catch (err) {
-                                                    alert('Wrong answer failed: ' + err.message);
-                                                } finally {
-                                                    setProcessingId(null);
-                                                }
-                                            }}
-                                        >
-                                            {processingId === p.id ? '...' : '❌ Wrong'}
-                                        </button>
+                    {disableScoring ? (
+                        <div style={{
+                            textAlign: 'center',
+                            padding: '0.9rem 1rem',
+                            background: 'rgba(245,197,66,0.10)',
+                            border: '1px solid rgba(245,197,66,0.35)',
+                            borderRadius: '10px',
+                            color: 'var(--text-secondary)'
+                        }}>
+                            Preview mode is active. Point assignment is disabled.
+                        </div>
+                    ) : (
+                        <div className="player-award-grid">
+                            {game.players.map(p => {
+                                const hasGuessedWrong = question.wrongAnswers?.includes(p.id);
+                                const wasRight = question.answered && question.answeredBy === p.id;
+                                return (
+                                    <div key={p.id} className={`player-award-card ${wasRight ? 'active' : ''}`} style={{ border: wasRight ? '2px solid var(--green)' : '1px solid var(--border)' }}>
+                                        <div>{p.name} {hasGuessedWrong && <span style={{fontSize: '0.7rem', color: 'var(--red)'}}>(Wrong)</span>}</div>
+                                        <div style={{ display: 'flex', gap: '0.25rem', justifyContent: 'center', marginTop: '0.5rem' }}>
+                                            <button 
+                                                className="btn btn-primary btn-sm" 
+                                                style={{ padding: '0.2rem 0.5rem' }} 
+                                                disabled={!!processingId}
+                                                onClick={async () => { 
+                                                    setProcessingId(p.id);
+                                                    try {
+                                                        await onAward(p.id); 
+                                                    } catch (err) {
+                                                        alert('Award failed: ' + err.message);
+                                                    } finally {
+                                                        setProcessingId(null);
+                                                        setShowingAnswer(false); 
+                                                    }
+                                                }}
+                                            >
+                                                {processingId === p.id ? '...' : '✅ Right'}
+                                            </button>
+                                            <button 
+                                                className="btn btn-danger btn-sm" 
+                                                style={{ padding: '0.2rem 0.5rem' }} 
+                                                disabled={!!processingId}
+                                                onClick={async () => {
+                                                    setProcessingId(p.id);
+                                                    try {
+                                                        await onDeduct(p.id);
+                                                    } catch (err) {
+                                                        alert('Wrong answer failed: ' + err.message);
+                                                    } finally {
+                                                        setProcessingId(null);
+                                                    }
+                                                }}
+                                            >
+                                                {processingId === p.id ? '...' : '❌ Wrong'}
+                                            </button>
+                                        </div>
                                     </div>
-                                </div>
-                            );
-                        })}
-                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
                     <div className="modal-actions" style={{ marginTop: '1rem', display: 'flex', justifyContent: 'space-between' }}>
                         <button className="btn btn-ghost" onClick={() => setShowingAnswer(true)}>👁 Reveal Answer</button>
-                        <button className="btn btn-danger" onClick={() => { onSkip(); setShowingAnswer(false); }}>⏭ Skip (No Points)</button>
+                        <button className="btn btn-danger" onClick={() => { onSkip(); setShowingAnswer(false); }}>
+                            {disableScoring ? '⏭ Mark As Seen' : '⏭ Skip (No Points)'}
+                        </button>
                     </div>
                 </div>
             </div>

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { API } from '../utils/api';
 
-export default function HostSetup({ game, setGame, loadGame, sendSocketMessage }) {
+export default function HostSetup({ game, setGame, loadGame, sendSocketMessage, onPreviewGame }) {
     const QUESTION_VALUES = [200, 400, 600, 800, 1000];
     const [activeTab, setActiveTab] = useState('game-info');
     const [gameName, setGameName] = useState(game.name || '');
@@ -250,7 +250,12 @@ export default function HostSetup({ game, setGame, loadGame, sendSocketMessage }
         { ok: game.categories.length >= 1, label: 'At least 1 topic added' },
         { ok: game.categories.length > 0 && game.categories.every(c => c.questions && c.questions.length >= 5), label: 'All topics have questions (5+)' },
     ];
+    const previewChecks = [
+        { ok: game.categories.length >= 1, label: 'At least 1 topic added' },
+        { ok: game.categories.some(c => (c.questions?.length || 0) > 0), label: 'At least 1 question ready' },
+    ];
     const canLaunch = checks.every(c => c.ok);
+    const canPreview = previewChecks.every(c => c.ok);
     const manualCategory = game.categories.find(c => c.id === manualCategoryId);
 
     return (
@@ -442,7 +447,25 @@ export default function HostSetup({ game, setGame, loadGame, sendSocketMessage }
                                     </li>
                                 ))}
                             </ul>
+                            <h3 style={{ marginTop: '1rem' }}>PREVIEW CHECK</h3>
+                            <ul className="validation-list">
+                                {previewChecks.map((c, i) => (
+                                    <li key={i} className={c.ok ? 'ok' : 'fail'}>
+                                        <span>{c.ok ? '✅' : '❌'}</span> {c.label}
+                                    </li>
+                                ))}
+                            </ul>
+                            <p style={{ textAlign: 'center', marginTop: '0.6rem', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                                Preview mode lets you test the board flow without starting the game or adding players.
+                            </p>
                             <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
+                                <button
+                                    className="btn btn-ghost btn-xl"
+                                    disabled={!canPreview}
+                                    onClick={() => onPreviewGame && onPreviewGame()}
+                                >
+                                    👀 Preview Game
+                                </button>
                                 <button className="btn btn-gold btn-xl" disabled={!canLaunch} onClick={handleLaunch}>🚀 Start Game!</button>
                             </div>
                         </div>

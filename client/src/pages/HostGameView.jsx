@@ -18,16 +18,44 @@ export default function HostGameView() {
     const [resetting, setResetting] = useState(false);
     const [endConfirm, setEndConfirm] = useState(false);
     const [ending, setEnding] = useState(false);
+    const [isPreviewMode, setIsPreviewMode] = useState(false);
+    const [previewGame, setPreviewGame] = useState(null);
+
+    const deepCloneGame = (sourceGame) => {
+        if (!sourceGame) return null;
+        return JSON.parse(JSON.stringify(sourceGame));
+    };
+
+    const enterPreviewMode = () => {
+        setPreviewGame(deepCloneGame(game));
+        setActiveQuestion(null);
+        setIsPreviewMode(true);
+        setMobileTab('board');
+    };
+
+    const exitPreviewMode = () => {
+        setActiveQuestion(null);
+        setPreviewGame(null);
+        setIsPreviewMode(false);
+    };
 
     if (loading) return <div className="app-wrapper" style={{padding: '2rem'}}>Loading game...</div>;
     if (error) return <div className="app-wrapper" style={{padding: '2rem'}}>Error: {error}</div>;
     if (!game) return <div className="app-wrapper">Game not found</div>;
 
+    const boardGame = isPreviewMode ? (previewGame || game) : game;
+
     // Based on game status, render Admin Console or The Actual Game Board
-    if (game.status === 'configuring') {
+    if (game.status === 'configuring' && !isPreviewMode) {
         return (
             <div className="view active">
-                <HostSetup game={game} setGame={setGame} loadGame={loadGame} sendSocketMessage={sendSocketMessage} />
+                <HostSetup
+                    game={game}
+                    setGame={setGame}
+                    loadGame={loadGame}
+                    sendSocketMessage={sendSocketMessage}
+                    onPreviewGame={enterPreviewMode}
+                />
             </div>
         );
     }
@@ -42,15 +70,23 @@ export default function HostGameView() {
 
     const handleTileClick = (categoryId, questionId) => {
         setActiveQuestion({ categoryId, questionId });
-        sendSocketMessage({ type: 'open_question', questionId });
+        if (!isPreviewMode) {
+            sendSocketMessage({ type: 'open_question', questionId });
+        }
     };
 
     const handleCloseModal = () => {
         setActiveQuestion(null);
-        sendSocketMessage({ type: 'close_question' });
+        if (!isPreviewMode) {
+            sendSocketMessage({ type: 'close_question' });
+        }
     };
 
     const handleAward = async (playerId) => {
+        if (isPreviewMode) {
+            alert('Preview mode: scoring is disabled.');
+            return;
+        }
         const updatedGame = await API.awardPoints(gameId, activeQuestion.questionId, playerId, activeQuestion.categoryId);
         console.debug('award response', updatedGame);
         setGame(updatedGame?.value || updatedGame);
@@ -58,6 +94,10 @@ export default function HostGameView() {
     };
 
     const handleDeduct = async (playerId) => {
+        if (isPreviewMode) {
+            alert('Preview mode: scoring is disabled.');
+            return;
+        }
         // First deduct points (server will record wrong guess)
         const deductResp = await API.deductPoints(gameId, activeQuestion.questionId, playerId, activeQuestion.categoryId);
         console.debug('deduct response', deductResp);
@@ -94,6 +134,25 @@ export default function HostGameView() {
     };
 
     const handleSkip = async () => {
+        if (isPreviewMode) {
+            const questionId = activeQuestion?.questionId;
+            const categoryId = activeQuestion?.categoryId;
+            setPreviewGame(prev => {
+                if (!prev || !questionId || !categoryId) return prev;
+                return {
+                    ...prev,
+                    categories: prev.categories.map(c => {
+                        if (c.id !== categoryId) return c;
+                        return {
+                            ...c,
+                            questions: (c.questions || []).map(q => q.id === questionId ? { ...q, answered: true, answeredBy: null } : q),
+                        };
+                    }),
+                };
+            });
+            handleCloseModal();
+            return;
+        }
         const updatedGame = await API.skipQuestion(gameId, activeQuestion.questionId, activeQuestion.categoryId);
         console.debug('skip response', updatedGame);
         setGame(updatedGame?.value || updatedGame);
@@ -126,11 +185,27 @@ export default function HostGameView() {
         }
     };
 
-    const answeredCount = game.categories?.reduce((acc, c) => acc + (c.questions?.filter(q => q.answered).length || 0), 0) || 0;
-    const totalQ = game.categories?.reduce((acc, c) => acc + (c.questions?.length || 0), 0) || 0;
+    const answeredCount = boardGame?.categories?.reduce((acc, c) => acc + (c.questions?.filter(q => q.answered).length || 0), 0) || 0;
+    const totalQ = boardGame?.categories?.reduce((acc, c) => acc + (c.questions?.length || 0), 0) || 0;
 
     return (
         <div className="view active">
+            {isPreviewMode && (
+                <div style={{
+                    margin: '0 0 1rem 0',
+                    padding: '0.8rem 1rem',
+                    border: '1px solid rgba(245,197,66,0.45)',
+                    background: 'rgba(245,197,66,0.12)',
+                    borderRadius: '12px',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: '1rem'
+                }}>
+                    <div style={{ fontWeight: 700, color: 'var(--gold)' }}>Preview Mode: local only, no scoring, no player broadcast.</div>
+                    <button className="btn btn-ghost btn-sm" onClick={exitPreviewMode}>Exit Preview</button>
+                </div>
+            )}
             <div className="host-mobile-tabs">
                 <button className={`host-tab ${mobileTab === 'board' ? 'active' : ''}`} onClick={() => setMobileTab('board')}>📋 Board</button>
                 <button className={`host-tab ${mobileTab === 'scores' ? 'active' : ''}`} onClick={() => setMobileTab('scores')}>📊 Scores</button>
@@ -138,15 +213,15 @@ export default function HostGameView() {
             </div>
             <div className="game-layout">
                 <div className={`game-board-area${mobileTab !== 'board' ? ' host-tab-hidden' : ''}`}>
-                    <h1 className="game-board-title">{game.name.toUpperCase()}</h1>
-                    <JeopardyBoard game={game} onTileClick={handleTileClick} />
+                    <h1 className="game-board-title">{boardGame.name.toUpperCase()}</h1>
+                    <JeopardyBoard game={boardGame} onTileClick={handleTileClick} />
                 </div>
                 <aside className={`game-sidebar${mobileTab === 'board' ? ' host-tab-hidden' : ''}`}>
                     <div className={mobileTab === 'info' ? 'host-tab-hidden' : ''}>
                         <p className="sidebar-section-title">📊 Scoreboard</p>
                         <div className="scoreboard">
                             {(() => {
-                                const sortedPlayers = [...game.players].sort((a,b) => b.score - a.score);
+                                const sortedPlayers = [...boardGame.players].sort((a,b) => b.score - a.score);
                                 const maxScore = Math.max(...sortedPlayers.map(p => p.score), -Infinity);
                                 
                                 return sortedPlayers.map(p => {
@@ -168,41 +243,47 @@ export default function HostGameView() {
                     </div>
                     <div className={`game-controls${mobileTab === 'scores' ? ' host-tab-hidden' : ''}`}>
                         <p className="sidebar-section-title">⚙️ Controls</p>
-                        <button className="btn btn-ghost btn-sm" onClick={() => navigate('/dashboard')}>← Back to Admin</button>
-                        {!endConfirm ? (
-                            <button className="btn btn-danger btn-sm" style={{ marginTop: '0.5rem' }} onClick={() => setEndConfirm(true)}>⏹ End Game</button>
+                        {isPreviewMode ? (
+                            <button className="btn btn-ghost btn-sm" onClick={exitPreviewMode}>← Back to Setup</button>
                         ) : (
-                            <div style={{ marginTop: '0.5rem' }}>
-                                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.4rem' }}>End game now and show leaderboard?</p>
-                                <div style={{ display: 'flex', gap: '0.4rem' }}>
-                                    <button className="btn btn-danger btn-sm" onClick={handleEndGame} disabled={ending}>
-                                        {ending ? 'Ending…' : 'Yes, End'}
-                                    </button>
-                                    <button className="btn btn-ghost btn-sm" onClick={() => setEndConfirm(false)} disabled={ending}>Cancel</button>
-                                </div>
-                            </div>
-                        )}
-                        {!resetConfirm ? (
-                            <button className="btn btn-danger btn-sm" style={{ marginTop: '0.5rem' }} onClick={() => setResetConfirm(true)}>↺ Reset Game</button>
-                        ) : (
-                            <div style={{ marginTop: '0.5rem' }}>
-                                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.4rem' }}>Reset all scores &amp; questions?</p>
-                                <div style={{ display: 'flex', gap: '0.4rem' }}>
-                                    <button className="btn btn-danger btn-sm" onClick={handleResetGame} disabled={resetting}>
-                                        {resetting ? 'Resetting…' : 'Yes, Reset'}
-                                    </button>
-                                    <button className="btn btn-ghost btn-sm" onClick={() => setResetConfirm(false)} disabled={resetting}>Cancel</button>
-                                </div>
-                            </div>
+                            <>
+                                <button className="btn btn-ghost btn-sm" onClick={() => navigate('/dashboard')}>← Back to Admin</button>
+                                {!endConfirm ? (
+                                    <button className="btn btn-danger btn-sm" style={{ marginTop: '0.5rem' }} onClick={() => setEndConfirm(true)}>⏹ End Game</button>
+                                ) : (
+                                    <div style={{ marginTop: '0.5rem' }}>
+                                        <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.4rem' }}>End game now and show leaderboard?</p>
+                                        <div style={{ display: 'flex', gap: '0.4rem' }}>
+                                            <button className="btn btn-danger btn-sm" onClick={handleEndGame} disabled={ending}>
+                                                {ending ? 'Ending…' : 'Yes, End'}
+                                            </button>
+                                            <button className="btn btn-ghost btn-sm" onClick={() => setEndConfirm(false)} disabled={ending}>Cancel</button>
+                                        </div>
+                                    </div>
+                                )}
+                                {!resetConfirm ? (
+                                    <button className="btn btn-danger btn-sm" style={{ marginTop: '0.5rem' }} onClick={() => setResetConfirm(true)}>↺ Reset Game</button>
+                                ) : (
+                                    <div style={{ marginTop: '0.5rem' }}>
+                                        <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.4rem' }}>Reset all scores &amp; questions?</p>
+                                        <div style={{ display: 'flex', gap: '0.4rem' }}>
+                                            <button className="btn btn-danger btn-sm" onClick={handleResetGame} disabled={resetting}>
+                                                {resetting ? 'Resetting…' : 'Yes, Reset'}
+                                            </button>
+                                            <button className="btn btn-ghost btn-sm" onClick={() => setResetConfirm(false)} disabled={resetting}>Cancel</button>
+                                        </div>
+                                    </div>
+                                )}
+                            </>
                         )}
                     </div>
                     
-                    {game.playerMode === 'self_register' && (
+                    {boardGame.playerMode === 'self_register' && !isPreviewMode && (
                         <div id="buzzer-panel" className={mobileTab === 'scores' ? 'host-tab-hidden' : ''}>
                             <p className="sidebar-section-title">🔔 Buzzers</p>
                             <div style={{ marginBottom: '.75rem' }}>
                                 <div style={{ fontSize: '.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '.08em' }}>Join at this device — code:</div>
-                                <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: '2rem', color: 'var(--gold)', letterSpacing: '.15em' }}>{game.joinCode}</div>
+                                <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: '2rem', color: 'var(--gold)', letterSpacing: '.15em' }}>{boardGame.joinCode}</div>
                             </div>
                         </div>
                     )}
@@ -210,7 +291,7 @@ export default function HostGameView() {
             </div>
 
             <QuestionModal 
-                game={game} 
+                game={boardGame} 
                 activeQuestion={activeQuestion} 
                 onClose={handleCloseModal}
                 onAward={handleAward}
@@ -219,6 +300,7 @@ export default function HostGameView() {
                 buzzerQueue={buzzerQueue}
                 questionTimer={questionTimer}
                 loadGame={loadGame}
+                disableScoring={isPreviewMode}
             />
         </div>
     );
