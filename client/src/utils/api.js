@@ -35,6 +35,7 @@ export const API = {
     createSession: (token) => API.post('/auth/session', { token }),
     getSession: () => API.get('/auth/session'),
     logoutSession: () => API.post('/auth/logout'),
+    getOwnerDashboardV1: (days = 30) => API.get(`/owner/dashboard-v1?days=${encodeURIComponent(days)}`),
 
     listGames: () => API.get('/games'),
     createGame: (name, playerMode) => API.post('/games', { name, playerMode }),

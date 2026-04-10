@@ -255,6 +255,17 @@ function getAllowedAdminEmails() {
         : [];
 }
 
+function getOwnerEmails() {
+    if (process.env.OWNER_EMAILS) {
+        return process.env.OWNER_EMAILS.split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+    }
+    if (process.env.SUPER_ADMIN_EMAILS) {
+        return process.env.SUPER_ADMIN_EMAILS.split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+    }
+    const allowedAdmins = getAllowedAdminEmails();
+    return allowedAdmins.length ? [allowedAdmins[0]] : [];
+}
+
 async function verifyAdminIdToken(idToken) {
     const ticket = await googleClient.verifyIdToken({
         idToken,
@@ -328,6 +339,17 @@ const requireGameOwner = async (req, res, next) => {
     }
 };
 
+const requireOwner = async (req, res, next) => {
+    const ownerEmails = getOwnerEmails();
+    if (ownerEmails.length === 0) {
+        return res.status(403).json({ error: 'Forbidden: Owner analytics is not configured. Set OWNER_EMAILS.' });
+    }
+    if (!ownerEmails.includes((req.user?.email || '').toLowerCase())) {
+        return res.status(403).json({ error: 'Forbidden: Owner access required.' });
+    }
+    return next();
+};
+
 // =====================
 // API Routes
 // =====================
@@ -372,6 +394,117 @@ app.use('/api/questionbank', requireAdmin);
 // GET /api/config — Return API key status
 app.get('/api/config', (req, res) => {
     res.json({ hasApiKey: !!getAI(), googleClientId: process.env.GOOGLE_CLIENT_ID });
+});
+
+// GET /api/owner/dashboard-v1 — Owner-only analytics snapshot for v1 dashboard
+app.get('/api/owner/dashboard-v1', requireAdmin, requireOwner, async (req, res) => {
+    try {
+        const requestedDays = Number(req.query.days);
+        const days = Number.isFinite(requestedDays) ? Math.max(1, Math.min(365, Math.floor(requestedDays))) : 30;
+        const now = new Date();
+        const windowStart = new Date(now.getTime() - (days * 24 * 60 * 60 * 1000));
+        const last7Start = new Date(now.getTime() - (7 * 24 * 60 * 60 * 1000));
+        const last30Start = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000));
+        const windowStartIso = windowStart.toISOString();
+        const last7StartIso = last7Start.toISOString();
+        const last30StartIso = last30Start.toISOString();
+
+        const [
+            gamesInWindow,
+            gamesInLast7,
+            gamesInLast30,
+            questionBankGrowthInWindow,
+            totalQuestionBank,
+            topAdmins,
+            allGamesInLast30,
+        ] = await Promise.all([
+            gamesCol()
+                .find(
+                    { createdAt: { $gte: windowStartIso } },
+                    { projection: { _id: 0, id: 1, status: 1, createdBy: 1, playerMode: 1, players: 1, createdAt: 1 } }
+                )
+                .toArray(),
+            gamesCol().countDocuments({ createdAt: { $gte: last7StartIso } }),
+            gamesCol().countDocuments({ createdAt: { $gte: last30StartIso } }),
+            questionBankCol().countDocuments({ createdAt: { $gte: windowStartIso } }),
+            questionBankCol().countDocuments({}),
+            gamesCol()
+                .aggregate([
+                    { $match: { createdAt: { $gte: windowStartIso } } },
+                    { $group: { _id: '$createdBy', gamesCreated: { $sum: 1 } } },
+                    { $project: { _id: 0, email: '$_id', gamesCreated: 1 } },
+                    { $sort: { gamesCreated: -1, email: 1 } },
+                    { $limit: 10 },
+                ])
+                .toArray(),
+            gamesCol()
+                .find({ createdAt: { $gte: last30StartIso } }, { projection: { _id: 0, createdBy: 1, players: 1 } })
+                .toArray(),
+        ]);
+
+        const monthlyActiveAdmins = new Set(allGamesInLast30.map(g => (g.createdBy || '').toLowerCase()).filter(Boolean)).size;
+
+        const monthlyActivePlayerKeys = new Set();
+        allGamesInLast30.forEach((game) => {
+            (game.players || []).forEach((player) => {
+                const key = (player?.name || '').trim().toLowerCase();
+                if (key) monthlyActivePlayerKeys.add(key);
+            });
+        });
+
+        const gamesCreatedInWindow = gamesInWindow.length;
+        const totalPlayersInWindow = gamesInWindow.reduce((sum, game) => sum + ((game.players || []).length), 0);
+        const completedGamesInWindow = gamesInWindow.filter(game => game.status === 'completed').length;
+        const selfRegisterGamesInWindow = gamesInWindow.filter(game => game.playerMode === 'self_register');
+        const redeemedSelfRegisterGames = selfRegisterGamesInWindow.filter(game => (game.players || []).length > 0).length;
+
+        const statusDistribution = {
+            configuring: gamesInWindow.filter(g => g.status === 'configuring').length,
+            active: gamesInWindow.filter(g => g.status === 'active').length,
+            paused: gamesInWindow.filter(g => g.status === 'paused').length,
+            completed: completedGamesInWindow,
+        };
+
+        const trendBuckets = new Map();
+        for (let i = days - 1; i >= 0; i -= 1) {
+            const dayDate = new Date(now.getTime() - (i * 24 * 60 * 60 * 1000));
+            const dayLabel = dayDate.toISOString().slice(0, 10);
+            trendBuckets.set(dayLabel, 0);
+        }
+        gamesInWindow.forEach((game) => {
+            const dayLabel = (game.createdAt || '').slice(0, 10);
+            if (trendBuckets.has(dayLabel)) {
+                trendBuckets.set(dayLabel, (trendBuckets.get(dayLabel) || 0) + 1);
+            }
+        });
+
+        return res.json({
+            filters: { days, windowStart: windowStartIso, now: now.toISOString() },
+            kpis: {
+                monthlyActiveAdmins,
+                gamesCreatedLast7: gamesInLast7,
+                gamesCreatedLast30: gamesInLast30,
+                gamesCreatedInWindow,
+                monthlyActivePlayers: monthlyActivePlayerKeys.size,
+                avgPlayersPerGame: gamesCreatedInWindow ? Number((totalPlayersInWindow / gamesCreatedInWindow).toFixed(2)) : 0,
+                gameCompletionRate: gamesCreatedInWindow ? Number(((completedGamesInWindow / gamesCreatedInWindow) * 100).toFixed(1)) : 0,
+                joinCodeRedemptionRate: selfRegisterGamesInWindow.length
+                    ? Number(((redeemedSelfRegisterGames / selfRegisterGamesInWindow.length) * 100).toFixed(1))
+                    : 0,
+                questionBankGrowthInWindow,
+                totalQuestionBank,
+            },
+            charts: {
+                dailyGamesCreated: Array.from(trendBuckets.entries()).map(([date, count]) => ({ date, count })),
+                gameStatusDistribution: statusDistribution,
+            },
+            tables: {
+                topAdmins,
+            },
+        });
+    } catch (e) {
+        return res.status(500).json({ error: e.message });
+    }
 });
 
 // GET /api/games — List all games (summary only, filtered by owner)

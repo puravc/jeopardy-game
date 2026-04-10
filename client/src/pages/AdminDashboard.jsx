@@ -5,6 +5,10 @@ import { useNavigate } from 'react-router-dom';
 export default function AdminDashboard() {
     const [games, setGames] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [ownerLoading, setOwnerLoading] = useState(false);
+    const [ownerAnalytics, setOwnerAnalytics] = useState(null);
+    const [ownerAnalyticsError, setOwnerAnalyticsError] = useState('');
+    const [ownerWindowDays, setOwnerWindowDays] = useState(30);
     const navigate = useNavigate();
     const [showNewModal, setShowNewModal] = useState(false);
     const [newGameName, setNewGameName] = useState('My Game');
@@ -13,6 +17,10 @@ export default function AdminDashboard() {
     useEffect(() => {
         loadGames();
     }, []);
+
+    useEffect(() => {
+        loadOwnerAnalytics(ownerWindowDays);
+    }, [ownerWindowDays]);
 
     const loadGames = async () => {
         try {
@@ -24,6 +32,31 @@ export default function AdminDashboard() {
             setLoading(false);
         }
     };
+
+    const loadOwnerAnalytics = async (days) => {
+        try {
+            setOwnerLoading(true);
+            setOwnerAnalyticsError('');
+            const data = await API.getOwnerDashboardV1(days);
+            setOwnerAnalytics(data);
+        } catch (e) {
+            // If this user is not owner-scoped, keep dashboard usable and simply hide owner analytics.
+            setOwnerAnalytics(null);
+            setOwnerAnalyticsError(e.message || 'Owner analytics unavailable');
+        } finally {
+            setOwnerLoading(false);
+        }
+    };
+
+    const statusDistribution = ownerAnalytics?.charts?.gameStatusDistribution || {
+        configuring: 0,
+        active: 0,
+        paused: 0,
+        completed: 0,
+    };
+    const dailyTrend = ownerAnalytics?.charts?.dailyGamesCreated || [];
+    const topAdmins = ownerAnalytics?.tables?.topAdmins || [];
+    const maxDaily = Math.max(1, ...dailyTrend.map((point) => point.count || 0));
 
     const handleNewGame = async () => {
         console.log('New Game button clicked');
@@ -78,6 +111,123 @@ export default function AdminDashboard() {
     return (
         <div id="games-dashboard" style={{ padding: '2rem' }}>
             <div style={{ width: '100%', maxWidth: '1100px', margin: '0 auto', boxSizing: 'border-box' }}>
+                {ownerLoading && <div className="text-muted" style={{ marginBottom: '1rem' }}>Loading owner analytics...</div>}
+
+                {!ownerLoading && ownerAnalytics && (
+                    <section style={{ marginBottom: '1.5rem', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '14px', padding: '1rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.8rem', gap: '0.5rem', flexWrap: 'wrap' }}>
+                            <h2 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--text-secondary)' }}>OWNER DASHBOARD V1</h2>
+                            <select
+                                value={ownerWindowDays}
+                                onChange={(e) => setOwnerWindowDays(Number(e.target.value))}
+                                className="input"
+                                style={{ maxWidth: '140px' }}
+                            >
+                                <option value={7}>Last 7 days</option>
+                                <option value={30}>Last 30 days</option>
+                                <option value={90}>Last 90 days</option>
+                            </select>
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '0.6rem', marginBottom: '1rem' }}>
+                            <div className="card" style={{ padding: '0.75rem' }}>
+                                <div className="text-muted text-sm">Monthly Active Admins</div>
+                                <div style={{ fontSize: '1.3rem', fontWeight: 700 }}>{ownerAnalytics.kpis.monthlyActiveAdmins}</div>
+                            </div>
+                            <div className="card" style={{ padding: '0.75rem' }}>
+                                <div className="text-muted text-sm">Games Created (7d / 30d)</div>
+                                <div style={{ fontSize: '1.3rem', fontWeight: 700 }}>{ownerAnalytics.kpis.gamesCreatedLast7} / {ownerAnalytics.kpis.gamesCreatedLast30}</div>
+                            </div>
+                            <div className="card" style={{ padding: '0.75rem' }}>
+                                <div className="text-muted text-sm">Monthly Active Players</div>
+                                <div style={{ fontSize: '1.3rem', fontWeight: 700 }}>{ownerAnalytics.kpis.monthlyActivePlayers}</div>
+                            </div>
+                            <div className="card" style={{ padding: '0.75rem' }}>
+                                <div className="text-muted text-sm">Avg Players per Game</div>
+                                <div style={{ fontSize: '1.3rem', fontWeight: 700 }}>{ownerAnalytics.kpis.avgPlayersPerGame}</div>
+                            </div>
+                            <div className="card" style={{ padding: '0.75rem' }}>
+                                <div className="text-muted text-sm">Game Completion Rate</div>
+                                <div style={{ fontSize: '1.3rem', fontWeight: 700 }}>{ownerAnalytics.kpis.gameCompletionRate}%</div>
+                            </div>
+                            <div className="card" style={{ padding: '0.75rem' }}>
+                                <div className="text-muted text-sm">Join-Code Redemption</div>
+                                <div style={{ fontSize: '1.3rem', fontWeight: 700 }}>{ownerAnalytics.kpis.joinCodeRedemptionRate}%</div>
+                            </div>
+                            <div className="card" style={{ padding: '0.75rem' }}>
+                                <div className="text-muted text-sm">Question Bank Growth</div>
+                                <div style={{ fontSize: '1.3rem', fontWeight: 700 }}>+{ownerAnalytics.kpis.questionBankGrowthInWindow}</div>
+                            </div>
+                            <div className="card" style={{ padding: '0.75rem' }}>
+                                <div className="text-muted text-sm">Total Question Bank</div>
+                                <div style={{ fontSize: '1.3rem', fontWeight: 700 }}>{ownerAnalytics.kpis.totalQuestionBank}</div>
+                            </div>
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: '0.8rem' }}>
+                            <div className="card" style={{ padding: '0.75rem' }}>
+                                <div className="text-muted text-sm" style={{ marginBottom: '0.5rem' }}>Daily Games Created ({ownerWindowDays}d)</div>
+                                <div style={{ display: 'flex', alignItems: 'flex-end', gap: '4px', minHeight: '120px' }}>
+                                    {dailyTrend.map((point) => (
+                                        <div key={point.date} title={`${point.date}: ${point.count}`} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                                            <div
+                                                style={{
+                                                    width: '100%',
+                                                    minHeight: point.count > 0 ? '3px' : '1px',
+                                                    height: `${Math.max(3, Math.round((point.count / maxDaily) * 100))}px`,
+                                                    background: 'var(--gold)',
+                                                    borderRadius: '4px 4px 0 0',
+                                                    opacity: 0.85,
+                                                }}
+                                            />
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div className="card" style={{ padding: '0.75rem' }}>
+                                <div className="text-muted text-sm" style={{ marginBottom: '0.5rem' }}>Game Status Distribution</div>
+                                <div style={{ display: 'grid', gap: '0.4rem' }}>
+                                    <div>Configuring: {statusDistribution.configuring}</div>
+                                    <div>Active: {statusDistribution.active}</div>
+                                    <div>Paused: {statusDistribution.paused}</div>
+                                    <div>Completed: {statusDistribution.completed}</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="card" style={{ padding: '0.75rem', marginTop: '0.8rem' }}>
+                            <div className="text-muted text-sm" style={{ marginBottom: '0.5rem' }}>Top Admins by Games Created</div>
+                            {topAdmins.length === 0 ? (
+                                <div className="text-muted">No activity in selected window.</div>
+                            ) : (
+                                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                    <thead>
+                                        <tr>
+                                            <th style={{ textAlign: 'left', paddingBottom: '0.3rem' }}>Admin</th>
+                                            <th style={{ textAlign: 'right', paddingBottom: '0.3rem' }}>Games</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {topAdmins.map((row) => (
+                                            <tr key={row.email}>
+                                                <td style={{ padding: '0.2rem 0' }}>{row.email}</td>
+                                                <td style={{ textAlign: 'right', padding: '0.2rem 0' }}>{row.gamesCreated}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            )}
+                        </div>
+                    </section>
+                )}
+
+                {!ownerLoading && ownerAnalyticsError && !ownerAnalytics && (
+                    <div className="text-muted" style={{ marginBottom: '1rem' }}>
+                        Owner analytics not shown: {ownerAnalyticsError}
+                    </div>
+                )}
+
                 <div className="flex justify-between items-center mb-2">
                     <h2 style={{ fontSize: '1.4rem', color: 'var(--text-secondary)' }}>SAVED GAMES</h2>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
