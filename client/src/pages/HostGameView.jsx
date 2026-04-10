@@ -16,6 +16,8 @@ export default function HostGameView() {
     const [mobileTab, setMobileTab] = useState('board');
     const [resetConfirm, setResetConfirm] = useState(false);
     const [resetting, setResetting] = useState(false);
+    const [endConfirm, setEndConfirm] = useState(false);
+    const [ending, setEnding] = useState(false);
 
     if (loading) return <div className="app-wrapper" style={{padding: '2rem'}}>Loading game...</div>;
     if (error) return <div className="app-wrapper" style={{padding: '2rem'}}>Error: {error}</div>;
@@ -111,6 +113,19 @@ export default function HostGameView() {
         }
     };
 
+    const handleEndGame = async () => {
+        setEnding(true);
+        try {
+            await API.endGame(gameId);
+            setEndConfirm(false);
+            await loadGame();
+        } catch (e) {
+            console.error('End game failed', e);
+        } finally {
+            setEnding(false);
+        }
+    };
+
     const answeredCount = game.categories?.reduce((acc, c) => acc + (c.questions?.filter(q => q.answered).length || 0), 0) || 0;
     const totalQ = game.categories?.reduce((acc, c) => acc + (c.questions?.length || 0), 0) || 0;
 
@@ -154,6 +169,19 @@ export default function HostGameView() {
                     <div className={`game-controls${mobileTab === 'scores' ? ' host-tab-hidden' : ''}`}>
                         <p className="sidebar-section-title">⚙️ Controls</p>
                         <button className="btn btn-ghost btn-sm" onClick={() => navigate('/dashboard')}>← Back to Admin</button>
+                        {!endConfirm ? (
+                            <button className="btn btn-danger btn-sm" style={{ marginTop: '0.5rem' }} onClick={() => setEndConfirm(true)}>⏹ End Game</button>
+                        ) : (
+                            <div style={{ marginTop: '0.5rem' }}>
+                                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.4rem' }}>End game now and show leaderboard?</p>
+                                <div style={{ display: 'flex', gap: '0.4rem' }}>
+                                    <button className="btn btn-danger btn-sm" onClick={handleEndGame} disabled={ending}>
+                                        {ending ? 'Ending…' : 'Yes, End'}
+                                    </button>
+                                    <button className="btn btn-ghost btn-sm" onClick={() => setEndConfirm(false)} disabled={ending}>Cancel</button>
+                                </div>
+                            </div>
+                        )}
                         {!resetConfirm ? (
                             <button className="btn btn-danger btn-sm" style={{ marginTop: '0.5rem' }} onClick={() => setResetConfirm(true)}>↺ Reset Game</button>
                         ) : (

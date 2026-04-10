@@ -101,6 +101,7 @@ export const API = {
     startGame: (id) => API.post(`/games/${id}/start`),
     pauseGame: (id) => API.post(`/games/${id}/pause`),
     resetGame: (id) => API.post(`/games/${id}/reset`),
+    endGame: (id) => API.post(`/games/${id}/end`),
     awardPoints: (id, questionId, playerId, categoryId) => API.post(`/games/${id}/award`, { questionId, playerId, categoryId }),
     deductPoints: (id, questionId, playerId, categoryId) => API.post(`/games/${id}/deduct`, { questionId, playerId, categoryId }),
     skipQuestion: (id, questionId, categoryId) => API.post(`/games/${id}/skip`, { questionId, categoryId }),

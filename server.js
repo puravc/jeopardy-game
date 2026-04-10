@@ -1367,6 +1367,38 @@ app.post('/api/games/:id/reset-question', async (req, res) => {
     }
 });
 
+// POST /api/games/:id/end — End game early and show leaderboard
+app.post('/api/games/:id/end', async (req, res) => {
+    try {
+        const game = await gamesCol().findOne({ id: req.params.id }, { projection: { _id: 0 } });
+        if (!game) return res.status(404).json({ error: 'Game not found' });
+
+        if (game.status === 'completed') {
+            return res.json(game);
+        }
+
+        const updated = await gamesCol().findOneAndUpdate(
+            { id: req.params.id },
+            { $set: { status: 'completed', updatedAt: new Date().toISOString() } },
+            { returnDocument: 'after', projection: { _id: 0 } }
+        );
+
+        const room = rooms.get(req.params.id);
+        if (room) {
+            room.questionOpen = false;
+            room.buzzerQueue = [];
+            broadcast(room, { type: 'question_closed' });
+            broadcast(room, { type: 'buzzer_update', queue: [] });
+            broadcast(room, { type: 'game_status_update', status: 'completed' });
+            broadcast(room, { type: 'game_update', game: updated });
+        }
+
+        res.json(updated);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // POST /api/games/:id/clone — Clone a game
 app.post('/api/games/:id/clone', async (req, res) => {
     try {
