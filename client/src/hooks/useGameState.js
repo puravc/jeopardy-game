@@ -18,6 +18,11 @@ export function useGameState(gameId, isHost = true) {
     const latestPlayersRef = useRef(null);
     const gameRef = useRef(null);
     const loadGameRef = useRef(null);
+    const reconnectTimeoutRef = useRef(null);
+    const reconnectAttemptsRef = useRef(0);
+    const playerInfoRef = useRef({ playerName: null, playerId: null });
+    const MAX_RECONNECT_ATTEMPTS = 20;
+    const MAX_RECONNECT_DELAY_MS = 30000;
 
     const getComparableSnapshot = (snapshot) => ({
         status: snapshot?.status || null,
@@ -41,7 +46,12 @@ export function useGameState(gameId, isHost = true) {
     useEffect(() => {
         loadGame();
         return () => {
-            if (wsRef.current) wsRef.current.close();
+            if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+            reconnectAttemptsRef.current = 0;
+            if (wsRef.current) {
+                wsRef.current._intentionalClose = true;
+                wsRef.current.close();
+            }
         };
     }, [gameId]);
 
@@ -86,6 +96,17 @@ export function useGameState(gameId, isHost = true) {
     }
 
     const connectWebSocket = (playerName = null, playerId = null) => {
+        // Save player info for automatic reconnection
+        if (playerName != null) playerInfoRef.current.playerName = playerName;
+        if (playerId != null) playerInfoRef.current.playerId = playerId;
+
+        // Close any existing socket before creating a new one to prevent orphans
+        if (wsRef.current) {
+            wsRef.current._intentionalClose = true;
+            try { wsRef.current.close(); } catch (e) { /* ignore */ }
+            wsRef.current = null;
+        }
+
         const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
         const host = import.meta.env.PROD ? window.location.host : 'localhost:3000';
         const ws = new WebSocket(`${proto}://${host}`);
@@ -120,12 +141,14 @@ export function useGameState(gameId, isHost = true) {
         };
 
         ws.onopen = () => {
+            console.log('WebSocket connected' + (reconnectAttemptsRef.current > 0 ? ` (reconnect #${reconnectAttemptsRef.current})` : ''));
+            reconnectAttemptsRef.current = 0; // Reset backoff on successful connection
             setSocketConnected(true);
             ws.send(JSON.stringify({ 
                 type: isHost ? 'host_join' : 'player_join', 
                 gameId,
-                playerName: playerName,
-                playerId: playerId,
+                playerName: playerInfoRef.current.playerName || playerName,
+                playerId: playerInfoRef.current.playerId || playerId,
             }));
         };
 
@@ -190,7 +213,30 @@ export function useGameState(gameId, isHost = true) {
             }
         };
 
-        ws.onclose = () => setSocketConnected(false);
+        ws.onerror = (err) => {
+            console.warn('WebSocket error', err);
+        };
+
+        ws.onclose = (event) => {
+            setSocketConnected(false);
+
+            // Don't reconnect if the close was intentional (component unmount, gameId change)
+            if (ws._intentionalClose) return;
+
+            // Auto-reconnect with exponential backoff
+            if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
+                const attempt = reconnectAttemptsRef.current;
+                const delay = Math.min(1000 * Math.pow(2, attempt), MAX_RECONNECT_DELAY_MS);
+                console.log(`WebSocket closed (code ${event.code}). Reconnecting in ${delay}ms (attempt ${attempt + 1}/${MAX_RECONNECT_ATTEMPTS})...`);
+                reconnectAttemptsRef.current += 1;
+                reconnectTimeoutRef.current = setTimeout(() => {
+                    connectWebSocket();
+                }, delay);
+            } else {
+                console.error(`WebSocket reconnect failed after ${MAX_RECONNECT_ATTEMPTS} attempts.`);
+            }
+        };
+
         wsRef.current = ws;
     };
 

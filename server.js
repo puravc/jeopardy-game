@@ -1558,15 +1558,17 @@ app.get('/api/join/:code', async (req, res) => {
 // =====================
 // WebSocket Buzzer Server
 // =====================
-// rooms: gameId -> { hostWs, players: Map<playerId, {ws, name}>, buzzerQueue: [], questionOpen: false }
+// rooms: gameId -> { hostWs, players: Map<playerId, {ws, name}>, buzzerQueue: [], questionOpen: false, disconnectTimers: Map<playerId, timeoutId> }
 const rooms = new Map();
 
 function getOrCreateRoom(gameId) {
     if (!rooms.has(gameId)) {
-        rooms.set(gameId, { hostWs: null, players: new Map(), buzzerQueue: [], questionOpen: false });
+        rooms.set(gameId, { hostWs: null, players: new Map(), buzzerQueue: [], questionOpen: false, disconnectTimers: new Map() });
     }
     return rooms.get(gameId);
 }
+
+const PLAYER_DISCONNECT_GRACE_MS = 30000; // 30 seconds to reconnect before eviction
 
 function broadcast(room, data) {
     const msg = JSON.stringify(data);
@@ -1586,7 +1588,31 @@ async function broadcastPlayerList(gameId) {
 const httpServer = http.createServer(app);
 const wss = new WebSocketServer({ server: httpServer });
 
+// Heartbeat: detect and terminate dead WebSocket connections.
+// Mobile carriers, NATs, Wi-Fi routers, and reverse proxies (e.g. Render)
+// silently drop idle TCP connections after 30-60s. Ping every 25s to keep
+// connections alive and terminate any that fail to respond with a pong.
+const WS_HEARTBEAT_INTERVAL_MS = 25000;
+
+const heartbeatInterval = setInterval(() => {
+    wss.clients.forEach((ws) => {
+        if (ws.isAlive === false) {
+            console.log('Terminating dead WebSocket (no pong received)');
+            return ws.terminate();
+        }
+        ws.isAlive = false;
+        ws.ping();
+    });
+}, WS_HEARTBEAT_INTERVAL_MS);
+
+wss.on('close', () => {
+    clearInterval(heartbeatInterval);
+});
+
 wss.on('connection', (ws, req) => {
+    // Mark connection alive; pong responses keep it alive across heartbeat cycles.
+    ws.isAlive = true;
+    ws.on('pong', () => { ws.isAlive = true; });
     const socketCookies = parseCookieHeader(req.headers.cookie || '');
     const sessionToken = socketCookies[SESSION_COOKIE_NAME] || null;
     let assignedGameId = null;
@@ -1677,6 +1703,14 @@ wss.on('connection', (ws, req) => {
             }
 
             const room = getOrCreateRoom(gameId);
+
+            // Cancel any pending disconnect-eviction timer for this player (reconnect within grace period)
+            if (room.disconnectTimers.has(assignedPlayerId)) {
+                clearTimeout(room.disconnectTimers.get(assignedPlayerId));
+                room.disconnectTimers.delete(assignedPlayerId);
+                console.log(`Cancelled disconnect timer for reconnecting player: ${assignedPlayerName} (${assignedPlayerId})`);
+            }
+
             room.players.set(assignedPlayerId, { ws, name: assignedPlayerName || playerName.trim(), id: assignedPlayerId });
             ws.send(JSON.stringify({ type: 'player_joined', playerId: assignedPlayerId, gameId,
                 questionOpen: room.questionOpen,
@@ -1757,11 +1791,17 @@ wss.on('connection', (ws, req) => {
         if (isHost) {
             room.hostWs = null;
         } else if (assignedPlayerId) {
-            room.players.delete(assignedPlayerId);
-            // Remove from DB if game is still configuring (pre-start)
+            // Check game status to determine eviction behavior
+            let gameStatus = 'configuring';
             try {
                 const game = await db.collection('games').findOne({ id: assignedGameId }, { projection: { status: 1 } });
-                if (game && game.status === 'configuring') {
+                gameStatus = game?.status || 'configuring';
+            } catch (e) { /* default to configuring = immediate eviction */ }
+
+            if (gameStatus === 'configuring') {
+                // Pre-game lobby: evict immediately and remove from DB
+                room.players.delete(assignedPlayerId);
+                try {
                     await db.collection('games').updateOne(
                         { id: assignedGameId },
                         { $pull: { players: { id: assignedPlayerId } } }
@@ -1770,9 +1810,28 @@ wss.on('connection', (ws, req) => {
                     if (room.hostWs && room.hostWs.readyState === 1) {
                         room.hostWs.send(JSON.stringify({ type: 'game_players_update', players: updated?.players || [] }));
                     }
-                }
-            } catch(e) { /* non-fatal */ }
-            await broadcastPlayerList(assignedGameId);
+                } catch(e) { /* non-fatal */ }
+                await broadcastPlayerList(assignedGameId);
+            } else {
+                // Active/paused/completed game: grace period before eviction.
+                // The player's socket is dead, but we keep them in the room so
+                // they don't miss broadcasts if they reconnect quickly.
+                console.log(`Player disconnected during ${gameStatus} game: ${assignedPlayerName} (${assignedPlayerId}). Grace period: ${PLAYER_DISCONNECT_GRACE_MS / 1000}s`);
+
+                const timerId = setTimeout(async () => {
+                    room.disconnectTimers.delete(assignedPlayerId);
+                    // Only evict if they haven't reconnected (their socket would have been replaced)
+                    const currentEntry = room.players.get(assignedPlayerId);
+                    if (currentEntry && currentEntry.ws === ws) {
+                        // Same dead socket — player never reconnected
+                        room.players.delete(assignedPlayerId);
+                        console.log(`Evicted player after grace period: ${assignedPlayerName} (${assignedPlayerId})`);
+                        await broadcastPlayerList(assignedGameId);
+                    }
+                }, PLAYER_DISCONNECT_GRACE_MS);
+
+                room.disconnectTimers.set(assignedPlayerId, timerId);
+            }
         }
     });
 });
